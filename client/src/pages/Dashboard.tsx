@@ -10,8 +10,9 @@ type ProviderListing = {
   id: string;
   providerAddress: string;
   name: string;
+  websiteUrl: string;
   endpoint: string;
-  ratePerSecond: string;
+  ratePerSecond: number;
   description: string;
   category: string;
   registeredAt: string;
@@ -23,6 +24,10 @@ type StreamBalanceResponse = {
   balanceSui: number;
 };
 
+function formatAccessRate(ratePerSecond: number): string {
+  return `${ratePerSecond.toLocaleString()} MIST/sec`;
+}
+
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'provider' | 'agent'>('agent');
   
@@ -32,9 +37,10 @@ export default function Dashboard() {
   
   // Provider Form State
   const [newDomain, setNewDomain] = useState('');
+  const [newWebsiteUrl, setNewWebsiteUrl] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newPrice, setNewPrice] = useState('');
-  const [newCategory, setNewCategory] = useState('General');
+  const [newCategory, setNewCategory] = useState('Social Media');
 
   // Agent SDK State
   const sdkRef = useRef<SuiDataGateSDK | null>(null);
@@ -133,16 +139,17 @@ export default function Dashboard() {
       await axios.post(`${GATEWAY_URL}/api/providers`, {
         providerAddress: '0x0000000000000000000000000000000000000000000000000000000000001234',
         name: newDomain,
-        endpoint: `/api/premium/${newCategory.toLowerCase()}/${Math.random().toString(36).substring(7)}`,
-        ratePerSecond: newPrice,
+        websiteUrl: newWebsiteUrl,
+        ratePerSecond: Number(newPrice),
         description: newDesc,
         category: newCategory
       });
       fetchProviders();
       setNewDomain('');
+      setNewWebsiteUrl('');
       setNewDesc('');
       setNewPrice('');
-      alert(`Successfully registered ${newDomain}!`);
+      alert(`Successfully listed ${newDomain}!`);
     } catch (err) {
       alert("Registration failed");
     }
@@ -172,6 +179,7 @@ export default function Dashboard() {
         if (streamMeta) {
             setActiveStreamId(streamMeta.streamId);
             setAgentStatus(response.isDecrypted ? 'Active Stream — Data Decrypted via Seal' : 'Active Stream — Data Served by On-Chain Gate');
+            setDataContent(prev => prev + `\\n\\n[SYSTEM] Stream created on-chain. TX: ${streamMeta.creationDigest}`);
         } else {
             setAgentStatus('Request Success (No Stream Created?)');
         }
@@ -230,20 +238,29 @@ export default function Dashboard() {
       {activeTab === 'provider' && (
         <div style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '30px' }}>
           <div style={{ background: '#171717', border: '1px solid #262626', borderRadius: '16px', padding: '30px' }}>
-            <h2>Register Premium API</h2>
-            <p style={{ color: '#a3a3a3', marginBottom: '20px' }}>Publish your API to the StreamEngine Marketplace registry.</p>
+            <h2>List Your Website</h2>
+            <p style={{ color: '#a3a3a3', marginBottom: '8px' }}>List your website so AI agents can pay to scrape it.</p>
+            <p style={{ color: '#a3a3a3', marginBottom: '20px' }}>Set a price per second. Agents open a payment stream to gain scraping access. When the stream stops, access is revoked instantly.</p>
             <form onSubmit={handleRegisterWebsite} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
               <input 
                 type="text" 
-                placeholder="Provider Name (e.g. Alpha Signals)" 
+                placeholder="Website Name (e.g. Bloomberg)" 
                 value={newDomain} 
                 onChange={e => setNewDomain(e.target.value)}
                 required
                 style={{ padding: '12px', background: '#000', border: '1px solid #333', borderRadius: '8px', color: '#fff' }} 
               />
               <input 
+                type="url" 
+                placeholder="Website URL" 
+                value={newWebsiteUrl} 
+                onChange={e => setNewWebsiteUrl(e.target.value)}
+                required
+                style={{ padding: '12px', background: '#000', border: '1px solid #333', borderRadius: '8px', color: '#fff' }} 
+              />
+              <input 
                 type="text" 
-                placeholder="Description of proprietary data" 
+                placeholder="Description of scrapeable content" 
                 value={newDesc} 
                 onChange={e => setNewDesc(e.target.value)}
                 required
@@ -251,8 +268,9 @@ export default function Dashboard() {
               />
               <input 
                 type="number" 
-                step="0.00001"
-                placeholder="Price per second (SUI)" 
+                step="1"
+                min="1"
+                placeholder="Rate per second of access (MIST)" 
                 value={newPrice} 
                 onChange={e => setNewPrice(e.target.value)}
                 required
@@ -263,13 +281,14 @@ export default function Dashboard() {
                 onChange={e => setNewCategory(e.target.value)}
                 style={{ padding: '12px', background: '#000', border: '1px solid #333', borderRadius: '8px', color: '#fff' }}
               >
+                 <option>Social Media</option>
                  <option>Finance</option>
-                 <option>Medical</option>
-                 <option>Legal</option>
+                 <option>News</option>
+                 <option>Research</option>
                  <option>General</option>
               </select>
               <button type="submit" style={{ padding: '14px', background: '#3B82F6', color: '#fff', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
-                Publish to Registry
+                List Website
               </button>
             </form>
           </div>
@@ -281,12 +300,12 @@ export default function Dashboard() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <h3 style={{ margin: '0 0 5px 0', color: '#3B82F6' }}>{site.name}</h3>
-                    <div style={{ fontSize: '12px', color: '#a3a3a3', marginBottom: '5px' }}>{site.endpoint}</div>
+                    <div style={{ fontSize: '12px', color: '#a3a3a3', marginBottom: '5px' }}>{site.websiteUrl}</div>
                     <div style={{ fontSize: '12px', color: '#10B981', display: 'inline-block', padding: '2px 6px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '4px' }}>{site.category}</div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '12px', color: '#a3a3a3' }}>Streaming Rate</div>
-                    <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff' }}>{site.ratePerSecond} SUI/s</div>
+                    <div style={{ fontSize: '12px', color: '#a3a3a3' }}>Rate per second of access</div>
+                    <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff' }}>{formatAccessRate(site.ratePerSecond)}</div>
                     <div style={{ fontSize: '12px', color: '#a3a3a3', marginTop: '8px' }}>Live Earnings</div>
                     <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#10B981' }}>{((providerEarningsMist[site.id] || 0) / 1e9).toFixed(6)} SUI</div>
                   </div>
@@ -300,7 +319,10 @@ export default function Dashboard() {
       {activeTab === 'agent' && (
         <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-            <h2>Agent Execution Terminal</h2>
+            <div>
+              <h2 style={{ marginBottom: '6px' }}>Agent Execution Terminal</h2>
+              <p style={{ color: '#a3a3a3', margin: 0 }}>Browse listed websites and open a payment stream to start scraping.</p>
+            </div>
             <div style={{ display: 'flex', gap: '15px' }}>
                 <div style={{ background: '#171717', padding: '10px 20px', borderRadius: '8px', border: '1px solid #333', fontSize: '14px' }}>
                 <strong>Address: </strong>
@@ -316,10 +338,11 @@ export default function Dashboard() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
             {/* Directory List */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-              <h3 style={{ margin: 0, paddingBottom: '10px', borderBottom: '1px solid #333' }}>Available Providers</h3>
+              <h3 style={{ margin: 0, paddingBottom: '10px', borderBottom: '1px solid #333' }}>Listed Websites</h3>
               {registeredSites.map(site => (
                 <div key={site.id} style={{ background: '#171717', border: activeSiteId === site.id ? '2px solid #10B981' : '1px solid #262626', borderRadius: '16px', padding: '20px' }}>
                   <h3 style={{ margin: '0 0 10px 0' }}>{site.name}</h3>
+                  <div style={{ color: '#3B82F6', fontSize: '12px', marginBottom: '8px' }}>{site.websiteUrl}</div>
                   <p style={{ color: '#a3a3a3', fontSize: '14px', marginBottom: '15px' }}>{site.description}</p>
                   
                   {activeSiteId === site.id && activeStreamId && (
@@ -330,7 +353,7 @@ export default function Dashboard() {
                   )}
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ fontWeight: 'bold', color: '#3B82F6' }}>{site.ratePerSecond} SUI / sec</div>
+                    <div style={{ fontWeight: 'bold', color: '#3B82F6' }}>{formatAccessRate(site.ratePerSecond)}</div>
                     <button 
                       onClick={() => activeStreamId && activeSiteId === site.id ? handleStopAgent() : handleStartAgent(site)}
                       disabled={!!activeStreamId && activeSiteId !== site.id}

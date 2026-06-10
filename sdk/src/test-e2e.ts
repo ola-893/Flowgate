@@ -33,7 +33,7 @@ async function runE2E() {
         const { data: registryData } = await axios.get(`${GATEWAY_URL}/api/registry/providers`);
         console.log(`  Found ${registryData.providers.length} providers:`);
         for (const p of registryData.providers) {
-            console.log(`    • ${p.name} — ${p.ratePerSecond} SUI/sec — ${p.endpoint}`);
+            console.log(`    • ${p.name} — ${p.ratePerSecond} MIST/sec — ${p.websiteUrl}`);
         }
     } catch (e: any) {
         console.error("  ❌ Could not reach registry. Is the server running?");
@@ -59,10 +59,12 @@ async function runE2E() {
     console.log(`  Agent address: ${sdk.getAddress()}`);
     console.log(`  Agent balance: ${(Number(agentBalance) / 1e9).toFixed(4)} SUI`);
 
-    // --- Step 3: Hit premium endpoint without payment → expect 402 ---
-    console.log("\n[Step 3] Requesting premium data WITHOUT payment...");
+    const targetEndpoint = `${GATEWAY_URL}/api/premium/x-social/feed`;
+
+    // --- Step 3: Hit premium website scrape route without payment → expect 402 ---
+    console.log("\n[Step 3] Requesting website scrape feed WITHOUT payment...");
     try {
-        await axios.get(`${GATEWAY_URL}/api/premium/alpha-signals/v1/btc`);
+        await axios.get(targetEndpoint);
         console.error("  ❌ Expected 402 but got 200 — middleware is broken!");
         return;
     } catch (e: any) {
@@ -77,13 +79,14 @@ async function runE2E() {
         }
     }
 
-    // --- Step 4: Use SDK to automatically handle 402 → create stream → get data ---
+    // --- Step 4: Use SDK to automatically handle 402 → create stream → scrape website content ---
     console.log("\n[Step 4] Using SDK to handle 402 automatically (PTB stream creation)...");
-    const response = await sdk.makeRequest(`${GATEWAY_URL}/api/premium/alpha-signals/v1/btc`);
+    const response = await sdk.makeRequest(targetEndpoint);
+    const firstPost = response.data.data[0];
     console.log(`  ✅ Data received!`);
     console.log(`     Provider: ${response.data.provider}`);
-    console.log(`     Signal: ${response.data.data.signal}`);
-    console.log(`     Confidence: ${response.data.data.confidence}`);
+    console.log(`     First post author: ${firstPost.author}`);
+    console.log(`     First post content: ${firstPost.content}`);
 
     // --- Step 5: Verify stream exists ---
     console.log("\n[Step 5] Verifying active stream on-chain...");
@@ -105,9 +108,9 @@ async function runE2E() {
 
     // --- Step 6: Make another request using existing stream → should succeed ---
     console.log("\n[Step 6] Making second request using existing stream...");
-    const response2 = await sdk.makeRequest(`${GATEWAY_URL}/api/premium/alpha-signals/v1/btc`);
+    const response2 = await sdk.makeRequest(targetEndpoint);
     console.log(`  ✅ Data received again (stream reused, no new PTB needed)`);
-    console.log(`     Timestamp: ${response2.data.data.timestamp}`);
+    console.log(`     Scraped at: ${response2.data.scrapedAt}`);
 
     // --- Step 7: Close the stream → reclaim unspent funds ---
     console.log("\n[Step 7] Closing stream (reclaiming unspent funds)...");
@@ -117,9 +120,9 @@ async function runE2E() {
     console.log(`     Refunded: ${closeResult.refundedAmount} MIST`);
 
     // --- Step 8: Hit endpoint again → should get 402 (access revoked!) ---
-    console.log("\n[Step 8] Requesting data AFTER stream closed...");
+    console.log("\n[Step 8] Requesting website scrape feed AFTER stream closed...");
     try {
-        await axios.get(`${GATEWAY_URL}/api/premium/alpha-signals/v1/btc`);
+        await axios.get(targetEndpoint);
         console.error("  ❌ Expected 402 but got 200 — access should have been revoked!");
     } catch (e: any) {
         if (e.response?.status === 402) {
@@ -135,10 +138,10 @@ async function runE2E() {
     console.log("  ✅ Full E2E Lifecycle Test PASSED");
     console.log("");
     console.log("  Complete flow demonstrated:");
-    console.log("    1. Agent browsed marketplace registry (3 providers)");
-    console.log("    2. Agent hit paywalled endpoint → 402 Payment Required");
+    console.log("    1. Agent browsed marketplace registry (3 listed websites)");
+    console.log("    2. Agent hit paywalled website scrape route → 402 Payment Required");
     console.log("    3. SDK auto-created payment stream on Sui testnet");
-    console.log("    4. Middleware verified stream balance via RPC → data served");
+    console.log("    4. Middleware verified stream balance via RPC → scraped content served");
     console.log("    5. Second request reused existing stream (no new TX)");
     console.log("    6. Agent closed stream → reclaimed unspent funds");
     console.log("    7. Access revoked → 402 returned again");

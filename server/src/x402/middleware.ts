@@ -24,6 +24,10 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function formatSuiRate(rateMist: number): string {
+  return (rateMist / 1_000_000_000).toFixed(9).replace(/0+$/, '').replace(/\.$/, '');
+}
+
 /**
  * Express middleware that enforces x402 Payment Required for AI agent access.
  * 
@@ -36,13 +40,14 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
   const streamId = (req.headers['x-streamengine-stream-id'] || req.headers['x-flowpay-stream-id']) as string;
   const txDigest = (req.headers['x-streamengine-tx-digest'] || req.headers['x-flowpay-tx-digest']) as string;
   const provider = getProviderByEndpoint(req.path);
+  const ratePerSecondMist = ratePerSecondToMist(provider?.ratePerSecond ?? process.env.STREAM_RATE_MIST ?? process.env.STREAM_RATE ?? '100');
 
   if (streamId) {
       // Validate the stream object via RPC (no consensus contention — fast read)
       try {
           const stream = await readStreamObjectState(streamId);
           if (stream.balanceMist > 0n) {
-              const earnedMist = stream.ratePerSecondMist ?? ratePerSecondToMist(provider?.ratePerSecond || process.env.STREAM_RATE || '0.0001');
+              const earnedMist = stream.ratePerSecondMist ?? ratePerSecondMist;
               if (provider) addProviderEarnings(provider.id, earnedMist);
 
               console.log(`[Middleware] ✅ Valid stream ${streamId} found with balance: ${stream.balanceMist}`);
@@ -67,7 +72,7 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
               options: { showEffects: true, showInput: true }
           });
           if (tx.effects?.status.status === 'success') {
-              if (provider) addProviderEarnings(provider.id, ratePerSecondToMist(provider.ratePerSecond));
+              if (provider) addProviderEarnings(provider.id, ratePerSecondMist);
               console.log(`[Middleware] ✅ Valid Fast-Path payment found: ${txDigest}`);
               return next();
           }
@@ -78,7 +83,7 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
 
   // No valid payment — return 402 Payment Required
   const merchantAddress = provider?.providerAddress || process.env.MERCHANT_SUI_ADDRESS || '0x0000000000000000000000000000000000000000000000000000000000001234';
-  const ratePerSecond = provider?.ratePerSecond || process.env.STREAM_RATE || '0.0001';
+  const ratePerSecond = formatSuiRate(ratePerSecondMist);
   
   res.set('X-StreamEngine-Mode', 'streaming');
   res.set('X-StreamEngine-Rate', ratePerSecond);
@@ -90,7 +95,8 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
       provider: merchantAddress,
       providerId: provider?.id,
       ratePerSecond,
-      minimumDeposit: String(Math.floor(parseFloat(ratePerSecond) * 3600 * 1_000_000_000)),
+      ratePerSecondMist,
+      minimumDeposit: String(ratePerSecondMist * 3600),
       packageId: PACKAGE_ID,
       instructions: 'Call create_stream() with this provider as recipient'
     }

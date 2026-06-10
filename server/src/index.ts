@@ -19,18 +19,33 @@ app.use(express.json());
 //  PUBLIC API — Marketplace Registry (no payment required)
 // ============================================================
 
-/** List all registered providers */
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/** List all registered website listings */
 function listProviders(req: express.Request, res: express.Response) {
   res.json({ providers: getProviders() });
 }
 
-/** Register a new provider endpoint */
+/** Register a new website listing */
 function createProvider(req: express.Request, res: express.Response) {
-  const { providerAddress, name, endpoint, ratePerSecond, description, category } = req.body;
-  if (!providerAddress || !name || !endpoint || !ratePerSecond) {
-    return res.status(400).json({ error: 'Missing required fields: providerAddress, name, endpoint, ratePerSecond' });
+  const { providerAddress, name, websiteUrl, endpoint, ratePerSecond, description, category } = req.body;
+  if (!providerAddress || !name || !websiteUrl || !ratePerSecond) {
+    return res.status(400).json({ error: 'Missing required fields: providerAddress, name, websiteUrl, ratePerSecond' });
   }
-  const listing = registerProvider({ providerAddress, name, endpoint, ratePerSecond, description: description || '', category: category || 'General' });
+  const listing = registerProvider({
+    providerAddress,
+    name,
+    websiteUrl,
+    endpoint: endpoint || `/api/premium/listed/${slugify(name)}/feed`,
+    ratePerSecond: Number(ratePerSecond),
+    description: description || '',
+    category: category || 'General',
+  });
   res.status(201).json(listing);
 }
 
@@ -47,7 +62,7 @@ app.get('/api/registry/providers/:id', (req, res) => {
   res.json(provider);
 });
 
-/** Register a new provider endpoint */
+/** Register a new website listing */
 app.post('/api/registry/providers', createProvider);
 
 /** Read live StreamObject balance from Sui RPC */
@@ -85,50 +100,99 @@ app.get('/api/health', (req, res) => {
 //  PREMIUM ENDPOINTS — Protected by x402 Payment Required
 // ============================================================
 
-app.get('/api/premium/alpha-signals/v1/btc', requireX402Payment, (req, res) => {
+app.get('/api/premium/x-social/feed', requireX402Payment, (req, res) => {
   const auth = (req as any).streamEngineAuth;
-  console.log(`[Gateway] Serving alpha-signals to agent ${auth?.agentAddress?.substring(0, 10) || 'unknown'}...`);
+  console.log(`[Gateway] Serving X scrape feed to agent ${auth?.agentAddress?.substring(0, 10) || 'unknown'}...`);
   res.json({
-    provider: 'Alpha Signals Inc.',
-    endpoint: '/api/premium/alpha-signals/v1/btc',
-    data: {
-      timestamp: new Date().toISOString(),
-      signal: 'STRONG_BUY',
-      confidence: 0.87,
-      predicted_price_24h: 108542.50,
-      features: ['on-chain whale activity', 'options flow', 'funding rates'],
-    }
+    provider: 'X (Twitter)',
+    websiteUrl: 'https://x.com',
+    endpoint: '/api/premium/x-social/feed',
+    scrapedAt: new Date().toISOString(),
+    data: [
+      {
+        author: '@sui_network',
+        content: 'Programmable payment streams unlock a new access model for autonomous agents.',
+        likes: 18420,
+        timestamp: new Date(Date.now() - 4 * 60 * 1000).toISOString(),
+      },
+      {
+        author: '@agentops',
+        content: 'Scraping budgets should be negotiated in real time, not settled in monthly invoices.',
+        likes: 9312,
+        timestamp: new Date(Date.now() - 11 * 60 * 1000).toISOString(),
+      },
+      {
+        author: '@webmonetize',
+        content: 'Site owners need a native way to meter AI crawler access without blocking useful agents.',
+        likes: 5621,
+        timestamp: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
+      },
+    ],
   });
 });
 
-app.get('/api/premium/medical/trials', requireX402Payment, (req, res) => {
+app.get('/api/premium/reddit/feed', requireX402Payment, (req, res) => {
   const auth = (req as any).streamEngineAuth;
-  console.log(`[Gateway] Serving medical trials to agent ${auth?.agentAddress?.substring(0, 10) || 'unknown'}...`);
+  console.log(`[Gateway] Serving Reddit scrape feed to agent ${auth?.agentAddress?.substring(0, 10) || 'unknown'}...`);
   res.json({
-    provider: 'Longevity Research Corp.',
-    endpoint: '/api/premium/medical/trials',
-    data: {
-      trial_id: 'NCT-2025-LNG-0042',
-      compound: 'Rapamycin-7b',
-      phase: 'Phase III',
-      efficacy_score: 0.73,
-      sample_size: 2400,
-    }
+    provider: 'Reddit',
+    websiteUrl: 'https://reddit.com',
+    endpoint: '/api/premium/reddit/feed',
+    scrapedAt: new Date().toISOString(),
+    data: [
+      {
+        subreddit: 'r/MachineLearning',
+        title: 'Payment streams for crawler access: what would fair pricing look like?',
+        upvotes: 4217,
+        top_comment: 'The interesting part is revocation. A dead stream should mean no more access.',
+        url: 'https://reddit.com/r/MachineLearning/comments/streamengine',
+      },
+      {
+        subreddit: 'r/Sui',
+        title: 'Shared objects make per-second web access controls surprisingly practical',
+        upvotes: 1288,
+        top_comment: 'This is the first x402-style demo I have seen with real Sui objects.',
+        url: 'https://reddit.com/r/Sui/comments/shared_streams',
+      },
+      {
+        subreddit: 'r/webscraping',
+        title: 'Would you pay per second for premium site scraping access?',
+        upvotes: 953,
+        top_comment: 'If it avoids brittle proxy games and has clear limits, yes.',
+        url: 'https://reddit.com/r/webscraping/comments/pay_per_second',
+      },
+    ],
   });
 });
 
-app.get('/api/premium/legal/precedents', requireX402Payment, (req, res) => {
+app.get('/api/premium/bloomberg/feed', requireX402Payment, (req, res) => {
   const auth = (req as any).streamEngineAuth;
-  console.log(`[Gateway] Serving legal precedents to agent ${auth?.agentAddress?.substring(0, 10) || 'unknown'}...`);
+  console.log(`[Gateway] Serving Bloomberg scrape feed to agent ${auth?.agentAddress?.substring(0, 10) || 'unknown'}...`);
   res.json({
-    provider: 'LexAI Data Services',
-    endpoint: '/api/premium/legal/precedents',
-    data: {
-      case_id: 'NYT-v-OpenAI-2024',
-      ruling: 'Fair use defense rejected for commercial LLM training',
-      relevance_score: 0.94,
-      jurisdiction: 'S.D.N.Y.',
-    }
+    provider: 'Bloomberg',
+    websiteUrl: 'https://bloomberg.com',
+    endpoint: '/api/premium/bloomberg/feed',
+    scrapedAt: new Date().toISOString(),
+    data: [
+      {
+        headline: 'AI infrastructure spending lifts cloud guidance across megacap earnings',
+        summary: 'Executives pointed to sustained demand from autonomous agents and data-heavy model workflows.',
+        ticker: 'MSFT',
+        published_at: new Date(Date.now() - 9 * 60 * 1000).toISOString(),
+      },
+      {
+        headline: 'Treasury yields edge lower as traders price a slower policy path',
+        summary: 'Bond desks cited softer labor data and lower inflation breakevens in early New York trading.',
+        ticker: 'US10Y',
+        published_at: new Date(Date.now() - 22 * 60 * 1000).toISOString(),
+      },
+      {
+        headline: 'Semiconductor suppliers rally on stronger-than-expected order backlog',
+        summary: 'Analysts said inference workloads are broadening demand beyond flagship GPU vendors.',
+        ticker: 'NVDA',
+        published_at: new Date(Date.now() - 37 * 60 * 1000).toISOString(),
+      },
+    ],
   });
 });
 
@@ -139,10 +203,10 @@ app.get('/api/premium/legal/precedents', requireX402Payment, (req, res) => {
 app.listen(PORT, () => {
   const providers = getProviders();
   console.log(`\n🚀 StreamEngine Gateway listening on http://localhost:${PORT}`);
-  console.log(`\n📋 Registry: ${providers.length} providers registered`);
+  console.log(`\n📋 Registry: ${providers.length} websites listed`);
   providers.forEach(p => {
-    console.log(`   → ${p.name} | ${p.ratePerSecond} SUI/sec | GET ${p.endpoint}`);
+    console.log(`   → ${p.name} | ${p.ratePerSecond} MIST/sec | GET ${p.endpoint}`);
   });
   console.log(`\n🔒 All premium endpoints return 402 Payment Required without a valid stream.`);
-  console.log(`📖 Browse providers: GET /api/registry/providers\n`);
+  console.log(`📖 Browse listed websites: GET /api/providers\n`);
 });
