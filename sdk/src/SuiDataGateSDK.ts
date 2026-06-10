@@ -352,6 +352,53 @@ export class SuiDataGateSDK {
         return { data: response.data, isDecrypted: false };
     }
 
+    /**
+     * Closes an active payment stream on-chain, reclaiming unspent funds.
+     * Both sender and recipient can close a stream.
+     */
+    public async closeStream(streamId: string): Promise<{ digest: string, refundedAmount: string }> {
+        console.log(`[SuiDataGateSDK] Closing stream ${streamId}...`);
+        
+        const tx = new Transaction();
+        tx.moveCall({
+            target: `${this.PACKAGE_ID}::stream::close_stream`,
+            typeArguments: [this.coinType],
+            arguments: [
+                tx.object(streamId),
+                tx.object(this.SUI_CLOCK),
+            ]
+        });
+
+        const result = await this.client.signAndExecuteTransaction({
+            signer: this.keypair,
+            transaction: tx,
+            options: { showEvents: true, showEffects: true }
+        });
+
+        await this.client.waitForTransaction({ digest: result.digest });
+
+        const closeEvent = result.events?.find(e => e.type.includes('StreamClosed'));
+        const refundedAmount = closeEvent ? (closeEvent.parsedJson as any).refunded_amount : '0';
+
+        // Remove from active streams cache
+        for (const [host, meta] of this.activeStreams) {
+            if (meta.streamId === streamId) {
+                this.activeStreams.delete(host);
+                break;
+            }
+        }
+
+        console.log(`[SuiDataGateSDK] ✅ Stream closed. Refunded: ${refundedAmount} MIST. TX: ${result.digest}`);
+        return { digest: result.digest, refundedAmount: String(refundedAmount) };
+    }
+
+    /**
+     * Returns all currently tracked active streams.
+     */
+    public getActiveStreams(): Map<string, StreamMetadata> {
+        return new Map(this.activeStreams);
+    }
+
     public calculateClaimable(stream: StreamMetadata): number {
         const now = Date.now();
         const start = stream.startTimeMs;
