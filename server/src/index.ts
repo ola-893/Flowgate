@@ -1,7 +1,13 @@
 import express from 'express';
 import cors from 'cors';
 import { requireX402Payment } from './x402/middleware.ts';
-import { getProviders, getProviderById, registerProvider } from './registry/providers.ts';
+import {
+  getProviderById,
+  getProviderEarnings,
+  getProviders,
+  registerProvider,
+} from './registry/providers.ts';
+import { readStreamObjectState } from './x402/streams.ts';
 
 const PORT = parseInt(process.env.PORT || '3001');
 const app = express();
@@ -14,9 +20,25 @@ app.use(express.json());
 // ============================================================
 
 /** List all registered providers */
-app.get('/api/registry/providers', (req, res) => {
+function listProviders(req: express.Request, res: express.Response) {
   res.json({ providers: getProviders() });
-});
+}
+
+/** Register a new provider endpoint */
+function createProvider(req: express.Request, res: express.Response) {
+  const { providerAddress, name, endpoint, ratePerSecond, description, category } = req.body;
+  if (!providerAddress || !name || !endpoint || !ratePerSecond) {
+    return res.status(400).json({ error: 'Missing required fields: providerAddress, name, endpoint, ratePerSecond' });
+  }
+  const listing = registerProvider({ providerAddress, name, endpoint, ratePerSecond, description: description || '', category: category || 'General' });
+  res.status(201).json(listing);
+}
+
+app.get('/api/providers', listProviders);
+
+app.get('/api/registry/providers', listProviders);
+
+app.post('/api/providers', createProvider);
 
 /** Get a specific provider */
 app.get('/api/registry/providers/:id', (req, res) => {
@@ -26,13 +48,32 @@ app.get('/api/registry/providers/:id', (req, res) => {
 });
 
 /** Register a new provider endpoint */
-app.post('/api/registry/providers', (req, res) => {
-  const { providerAddress, name, endpoint, ratePerSecond, description, category } = req.body;
-  if (!providerAddress || !name || !endpoint || !ratePerSecond) {
-    return res.status(400).json({ error: 'Missing required fields: providerAddress, name, endpoint, ratePerSecond' });
+app.post('/api/registry/providers', createProvider);
+
+/** Read live StreamObject balance from Sui RPC */
+app.get('/api/streams/:id/balance', async (req, res) => {
+  try {
+    const stream = await readStreamObjectState(req.params.id);
+    const balanceMist = Number(stream.balanceMist);
+    res.json({
+      streamId: stream.streamId,
+      balanceMist,
+      balanceSui: balanceMist / 1_000_000_000,
+    });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(404).json({ error: 'Stream not found', message });
   }
-  const listing = registerProvider({ providerAddress, name, endpoint, ratePerSecond, description: description || '', category: category || 'General' });
-  res.status(201).json(listing);
+});
+
+/** Return provider earnings accumulated by successful access grants */
+app.get('/api/providers/:id/earnings', (req, res) => {
+  const earnings = getProviderEarnings(req.params.id);
+  if (!earnings) return res.status(404).json({ error: 'Provider not found' });
+  res.json({
+    providerId: req.params.id,
+    totalEarnedMist: earnings.totalEarnedMist,
+  });
 });
 
 /** Health check */

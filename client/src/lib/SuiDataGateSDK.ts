@@ -28,6 +28,12 @@ const DEFAULT_TESTNET_KEY_SERVERS = [
     { objectId: '0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8', weight: 1 },
 ];
 
+const DEFAULT_PACKAGE_ID = '0xb05b3964df8b88a86cda6b192893399966014af9dd6fc6beb26f1343a0495495';
+
+function getEnvValue(key: string): string | undefined {
+    return (import.meta as { env?: Record<string, string | undefined> }).env?.[key];
+}
+
 export class SuiDataGateSDK {
     private client: SuiJsonRpcClient;
     private keypair: Ed25519Keypair;
@@ -40,7 +46,7 @@ export class SuiDataGateSDK {
     public brain: GeminiPaymentBrain;
     private isPaused: boolean = false;
 
-    private PACKAGE_ID = process.env.SUI_DATA_GATE_PACKAGE_ID || "0xb05b3964df8b88a86cda6b192893399966014af9dd6fc6beb26f1343a0495495";
+    private PACKAGE_ID = getEnvValue('VITE_SUI_DATA_GATE_PACKAGE_ID') || DEFAULT_PACKAGE_ID;
     private SUI_CLOCK = "0x6"; 
     
     constructor(config: SuiDataGateConfig) {
@@ -58,7 +64,7 @@ export class SuiDataGateSDK {
         this.apiKey = config.apiKey;
         this.agentId = config.agentId;
         this.coinType = config.coinType || '0x2::sui::SUI';
-        this.brain = new GeminiPaymentBrain(process.env.GEMINI_API_KEY || "");
+        this.brain = new GeminiPaymentBrain(getEnvValue('VITE_GEMINI_API_KEY') || "");
     }
 
     private metrics = {

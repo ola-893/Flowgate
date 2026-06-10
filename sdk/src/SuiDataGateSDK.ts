@@ -19,6 +19,7 @@ export interface StreamMetadata {
     startTimeMs: number;
     ratePerSecond: number;
     amount: number;
+    creationDigest: string;
 }
 
 // Mysten's official testnet Seal key servers (verified on-chain)
@@ -170,11 +171,12 @@ export class SuiDataGateSDK {
             streamId: streamData.streamId,
             startTimeMs: streamData.startTimeMs,
             ratePerSecond: rateMist,
-            amount: amountMist
+            amount: amountMist,
+            creationDigest: streamData.digest
         });
 
         // Retry Request with stream ID
-        console.log(`[SuiDataGateSDK] Stream ${streamData.streamId} created. Retrying...`);
+        console.log(`[SuiDataGateSDK] Stream ${streamData.streamId} created. TX: ${streamData.digest}. Retrying...`);
         const retryOptions = {
             ...options,
             headers: {
@@ -201,7 +203,7 @@ export class SuiDataGateSDK {
      * Creates a payment stream on-chain via PTB.
      * Supports both SUI (split from gas) and custom coins (e.g. USDC).
      */
-    private async createStream(recipient: string, amountMist: number, ratePerSecondMist: number): Promise<{ streamId: string, startTimeMs: number }> {
+    private async createStream(recipient: string, amountMist: number, ratePerSecondMist: number): Promise<{ streamId: string, startTimeMs: number, digest: string }> {
         const tx = new Transaction();
         
         let coinToStream;
@@ -245,7 +247,8 @@ export class SuiDataGateSDK {
         const parsedJson = createdEvent.parsedJson as any;
         return {
             streamId: parsedJson.stream_id,
-            startTimeMs: Date.now()
+            startTimeMs: Date.now(),
+            digest: result.digest
         };
     }
 

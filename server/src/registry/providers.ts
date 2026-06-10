@@ -17,6 +17,8 @@ export interface ProviderListing {
     registeredAt: string;
 }
 
+const MIST_PER_SUI = 1_000_000_000;
+
 // In-memory registry (seeded with demo providers)
 const registry: ProviderListing[] = [
     {
@@ -51,6 +53,29 @@ const registry: ProviderListing[] = [
     },
 ];
 
+const earningsByProviderId: Record<string, number> = {};
+
+function slugify(value: string): string {
+    return value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+
+function providerAliases(provider: ProviderListing): string[] {
+    const aliases = [provider.id, slugify(provider.name)];
+    if (provider.id.startsWith('provider-')) {
+        aliases.push(provider.id.slice('provider-'.length));
+    }
+    return aliases;
+}
+
+export function ratePerSecondToMist(ratePerSecond: string): number {
+    const parsed = Number(ratePerSecond);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+    return Math.floor(parsed * MIST_PER_SUI);
+}
+
 export function getProviders(): ProviderListing[] {
     return [...registry];
 }
@@ -59,8 +84,33 @@ export function getProviderById(id: string): ProviderListing | undefined {
     return registry.find(p => p.id === id);
 }
 
+export function getProviderByPublicId(id: string): ProviderListing | undefined {
+    const normalized = slugify(id);
+    return registry.find(p => providerAliases(p).includes(normalized));
+}
+
 export function getProviderByEndpoint(endpoint: string): ProviderListing | undefined {
     return registry.find(p => p.endpoint === endpoint);
+}
+
+export function addProviderEarnings(providerId: string, earnedMist: number): number {
+    const provider = getProviderById(providerId) || getProviderByPublicId(providerId);
+    if (!provider || !Number.isFinite(earnedMist) || earnedMist <= 0) {
+        return 0;
+    }
+
+    earningsByProviderId[provider.id] = (earningsByProviderId[provider.id] || 0) + earnedMist;
+    return earningsByProviderId[provider.id];
+}
+
+export function getProviderEarnings(providerId: string): { provider: ProviderListing; totalEarnedMist: number } | undefined {
+    const provider = getProviderById(providerId) || getProviderByPublicId(providerId);
+    if (!provider) return undefined;
+
+    return {
+        provider,
+        totalEarnedMist: earningsByProviderId[provider.id] || 0,
+    };
 }
 
 export function registerProvider(listing: Omit<ProviderListing, 'id' | 'registeredAt'>): ProviderListing {

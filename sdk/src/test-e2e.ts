@@ -93,6 +93,7 @@ async function runE2E() {
         streamId = meta.streamId;
         const balance = await sdk.getStreamBalance(streamId);
         console.log(`  Stream: ${streamId}`);
+        console.log(`  Creation TX Digest: ${meta.creationDigest}`);
         console.log(`  Host: ${host}`);
         console.log(`  On-chain balance: ${balance} MIST (${Number(balance) / 1e9} SUI)`);
     }

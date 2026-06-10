@@ -17,11 +17,18 @@ type ProviderListing = {
   registeredAt: string;
 };
 
+type StreamBalanceResponse = {
+  streamId: string;
+  balanceMist: number;
+  balanceSui: number;
+};
+
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'provider' | 'agent'>('agent');
   
   // Registry State
   const [registeredSites, setRegisteredSites] = useState<ProviderListing[]>([]);
+  const [providerEarningsMist, setProviderEarningsMist] = useState<Record<string, number>>({});
   
   // Provider Form State
   const [newDomain, setNewDomain] = useState('');
@@ -37,7 +44,7 @@ export default function Dashboard() {
   const [dataContent, setDataContent] = useState<string>('');
   const [activeSiteId, setActiveSiteId] = useState<string | null>(null);
   const [activeStreamId, setActiveStreamId] = useState<string | null>(null);
-  const [streamBalanceMist, setStreamBalanceMist] = useState<bigint>(0n);
+  const [streamBalanceMist, setStreamBalanceMist] = useState<number>(0);
 
   // 1. Initialize SDK
   useEffect(() => {
@@ -67,8 +74,21 @@ export default function Dashboard() {
   // 2. Fetch Providers
   const fetchProviders = async () => {
     try {
-      const res = await axios.get(`${GATEWAY_URL}/api/registry/providers`);
-      setRegisteredSites(res.data.providers);
+      const res = await axios.get<{ providers: ProviderListing[] }>(`${GATEWAY_URL}/api/providers`);
+      const providers = res.data.providers;
+      setRegisteredSites(providers);
+
+      const earnings = await Promise.all(
+        providers.map(async site => {
+          try {
+            const earningsRes = await axios.get<{ totalEarnedMist: number }>(`${GATEWAY_URL}/api/providers/${site.id}/earnings`);
+            return [site.id, earningsRes.data.totalEarnedMist] as const;
+          } catch {
+            return [site.id, 0] as const;
+          }
+        })
+      );
+      setProviderEarningsMist(Object.fromEntries(earnings));
     } catch (e) {
       console.error("Failed to load providers. Is the server running?");
     }
@@ -82,26 +102,35 @@ export default function Dashboard() {
 
   // 3. Track active stream balance on-chain
   useEffect(() => {
-    let interval: any;
-    if (activeStreamId && sdkRef.current) {
-      interval = setInterval(async () => {
-        try {
-           const bal = await sdkRef.current!.getStreamBalance(activeStreamId);
-           setStreamBalanceMist(bal);
-           
-           // Update main wallet balance too
-           const mainBal = await sdkRef.current!.getBalance();
-           setAgentUsdcBalance(Number(mainBal) / 1e9);
-        } catch (e) {}
-      }, 3000);
-    }
-    return () => clearInterval(interval);
+    if (!activeStreamId || !sdkRef.current) return;
+
+    let cancelled = false;
+    const pollBalance = async () => {
+      try {
+        const [streamRes, mainBal] = await Promise.all([
+          axios.get<StreamBalanceResponse>(`${GATEWAY_URL}/api/streams/${activeStreamId}/balance`),
+          sdkRef.current!.getBalance(),
+        ]);
+        if (cancelled) return;
+        setStreamBalanceMist(streamRes.data.balanceMist);
+        setAgentUsdcBalance(Number(mainBal) / 1e9);
+      } catch (e) {
+        if (!cancelled) setStreamBalanceMist(0);
+      }
+    };
+
+    pollBalance();
+    const interval = setInterval(pollBalance, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [activeStreamId]);
 
   const handleRegisterWebsite = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await axios.post(`${GATEWAY_URL}/api/registry/providers`, {
+      await axios.post(`${GATEWAY_URL}/api/providers`, {
         providerAddress: '0x0000000000000000000000000000000000000000000000000000000000001234',
         name: newDomain,
         endpoint: `/api/premium/${newCategory.toLowerCase()}/${Math.random().toString(36).substring(7)}`,
@@ -142,12 +171,12 @@ export default function Dashboard() {
         
         if (streamMeta) {
             setActiveStreamId(streamMeta.streamId);
-            setAgentStatus('Active Stream — Data Decrypted via Seal');
+            setAgentStatus(response.isDecrypted ? 'Active Stream — Data Decrypted via Seal' : 'Active Stream — Data Served by On-Chain Gate');
         } else {
             setAgentStatus('Request Success (No Stream Created?)');
         }
 
-        setDataContent(prev => prev + `\\n\\n[DECRYPTED DATA from ${site.name}]\\n` + JSON.stringify(response.data.data, null, 2));
+        setDataContent(prev => prev + `\\n\\n[STREAM DATA from ${site.name}]\\n` + JSON.stringify(response.data.data ?? response.data, null, 2));
 
     } catch (err: any) {
         setAgentStatus('Error: Access Denied');
@@ -170,7 +199,7 @@ export default function Dashboard() {
     
     setActiveStreamId(null);
     setActiveSiteId(null);
-    setStreamBalanceMist(0n);
+    setStreamBalanceMist(0);
     
     // Refresh balance
     const bal = await sdkRef.current.getBalance();
@@ -258,6 +287,8 @@ export default function Dashboard() {
                   <div style={{ textAlign: 'right' }}>
                     <div style={{ fontSize: '12px', color: '#a3a3a3' }}>Streaming Rate</div>
                     <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff' }}>{site.ratePerSecond} SUI/s</div>
+                    <div style={{ fontSize: '12px', color: '#a3a3a3', marginTop: '8px' }}>Live Earnings</div>
+                    <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#10B981' }}>{((providerEarningsMist[site.id] || 0) / 1e9).toFixed(6)} SUI</div>
                   </div>
                 </div>
               </div>
@@ -294,7 +325,7 @@ export default function Dashboard() {
                   {activeSiteId === site.id && activeStreamId && (
                      <div style={{ marginBottom: '15px', padding: '10px', background: '#000', borderRadius: '8px', border: '1px solid #333' }}>
                         <div style={{ fontSize: '12px', color: '#a3a3a3' }}>On-Chain Stream Balance:</div>
-                        <div style={{ color: '#10B981', fontWeight: 'bold', fontSize: '18px' }}>{(Number(streamBalanceMist) / 1e9).toFixed(4)} SUI remaining</div>
+                        <div style={{ color: '#10B981', fontWeight: 'bold', fontSize: '18px' }}>{(streamBalanceMist / 1e9).toFixed(4)} SUI remaining</div>
                      </div>
                   )}
 

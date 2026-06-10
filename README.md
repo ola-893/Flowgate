@@ -53,19 +53,30 @@ sequenceDiagram
     Seal-->>AI: Decrypted Plaintext Data!
 ```
 
-## Running the Integration Test
+## How to Run
 
-We have provided a standalone, end-to-end integration test that simulates the entire lifecycle locally:
+### 1. Start the Gateway Server
+The server runs the marketplace registry and the 402-gated premium endpoints.
+```bash
+cd server
+npm install
+npx tsx src/index.ts
+```
 
-1. Navigates the 402 Paywall.
-2. Evaluates the economic heuristics to initiate a Sui Stream.
-3. Successfully negotiates access to Seal-encrypted data.
-4. Verifies the `seal_approve_stream` Move policy using `devInspectTransactionBlock`.
-
+### 2. Run the Full E2E Test (CLI)
+In a new terminal, run the E2E test to see the SDK autonomously navigate the paywall, create a stream, scrape data, and close the stream.
 ```bash
 cd sdk
 npm install
-npx tsx src/test-integration.ts
+npx tsx src/test-e2e.ts
+```
+
+### 3. Run the Dashboard UI
+The React app provides a visual marketplace for providers to list APIs and for agents to discover and connect to them.
+```bash
+cd client
+npm install
+npm run dev
 ```
 
 ## Deployments
@@ -76,5 +87,5 @@ npx tsx src/test-integration.ts
 - **Sui Move** (Shared Objects, `sui::clock`)
 - **Seal SDK** (`@mysten/seal`)
 - **Node.js / Express** (Middleware)
-- **React** (Dashboard UI)
+- **React / Vite** (Dashboard UI)
 - **Google Gemini API** (Payment Heuristics)

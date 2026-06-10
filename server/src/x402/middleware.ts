@@ -1,9 +1,28 @@
 import { Request, Response, NextFunction } from 'express';
 import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
+import {
+  addProviderEarnings,
+  getProviderByEndpoint,
+  ratePerSecondToMist,
+} from '../registry/providers.ts';
+import { readStreamObjectState } from './streams.ts';
 
 const SUI_RPC_URL = process.env.SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
 const PACKAGE_ID = process.env.SUI_DATA_GATE_PACKAGE_ID || '0xb05b3964df8b88a86cda6b192893399966014af9dd6fc6beb26f1343a0495495';
 const client = new SuiJsonRpcClient({ url: SUI_RPC_URL });
+
+interface StreamEngineRequest extends Request {
+  streamEngineAuth?: {
+    streamId: string;
+    agentAddress?: string;
+    balance: string;
+    providerId?: string;
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /**
  * Express middleware that enforces x402 Payment Required for AI agent access.
@@ -16,32 +35,29 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
   // Support both header naming conventions
   const streamId = (req.headers['x-streamengine-stream-id'] || req.headers['x-flowpay-stream-id']) as string;
   const txDigest = (req.headers['x-streamengine-tx-digest'] || req.headers['x-flowpay-tx-digest']) as string;
+  const provider = getProviderByEndpoint(req.path);
 
   if (streamId) {
       // Validate the stream object via RPC (no consensus contention — fast read)
       try {
-          const objectData = await client.getObject({
-              id: streamId,
-              options: { showContent: true }
-          });
+          const stream = await readStreamObjectState(streamId);
+          if (stream.balanceMist > 0n) {
+              const earnedMist = stream.ratePerSecondMist ?? ratePerSecondToMist(provider?.ratePerSecond || process.env.STREAM_RATE || '0.0001');
+              if (provider) addProviderEarnings(provider.id, earnedMist);
 
-          if (objectData.data && objectData.data.content?.dataType === 'moveObject') {
-              const fields = objectData.data.content.fields as any;
-              const balance = BigInt(fields.balance);
-              if (balance > 0n) {
-                  console.log(`[Middleware] ✅ Valid stream ${streamId} found with balance: ${balance}`);
-                  (req as any).streamEngineAuth = {
-                      streamId,
-                      agentAddress: fields.sender,
-                      balance: balance.toString(),
-                  };
-                  return next();
-              } else {
-                  console.log(`[Middleware] ❌ Stream ${streamId} balance is 0 — access revoked.`);
-              }
+              console.log(`[Middleware] ✅ Valid stream ${streamId} found with balance: ${stream.balanceMist}`);
+              (req as StreamEngineRequest).streamEngineAuth = {
+                  streamId,
+                  agentAddress: stream.sender,
+                  balance: stream.balanceMist.toString(),
+                  providerId: provider?.id,
+              };
+              return next();
+          } else {
+              console.log(`[Middleware] ❌ Stream ${streamId} balance is 0 — access revoked.`);
           }
-      } catch (e: any) {
-          console.error(`[Middleware] Error querying stream ${streamId}:`, e.message);
+      } catch (error: unknown) {
+          console.error(`[Middleware] Error querying stream ${streamId}:`, errorMessage(error));
       }
   } else if (txDigest) {
       // Fast-Path: verify a direct payment transaction
@@ -51,17 +67,18 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
               options: { showEffects: true, showInput: true }
           });
           if (tx.effects?.status.status === 'success') {
+              if (provider) addProviderEarnings(provider.id, ratePerSecondToMist(provider.ratePerSecond));
               console.log(`[Middleware] ✅ Valid Fast-Path payment found: ${txDigest}`);
               return next();
           }
-      } catch (e: any) {
-          console.error(`[Middleware] Error verifying tx ${txDigest}:`, e.message);
+      } catch (error: unknown) {
+          console.error(`[Middleware] Error verifying tx ${txDigest}:`, errorMessage(error));
       }
   }
 
   // No valid payment — return 402 Payment Required
-  const merchantAddress = process.env.MERCHANT_SUI_ADDRESS || '0x0000000000000000000000000000000000000000000000000000000000001234';
-  const ratePerSecond = process.env.STREAM_RATE || '0.0001';
+  const merchantAddress = provider?.providerAddress || process.env.MERCHANT_SUI_ADDRESS || '0x0000000000000000000000000000000000000000000000000000000000001234';
+  const ratePerSecond = provider?.ratePerSecond || process.env.STREAM_RATE || '0.0001';
   
   res.set('X-StreamEngine-Mode', 'streaming');
   res.set('X-StreamEngine-Rate', ratePerSecond);
@@ -71,6 +88,7 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
     error: 'Payment Required',
     x402: {
       provider: merchantAddress,
+      providerId: provider?.id,
       ratePerSecond,
       minimumDeposit: String(Math.floor(parseFloat(ratePerSecond) * 3600 * 1_000_000_000)),
       packageId: PACKAGE_ID,
