@@ -10,10 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@mysten/dapp-kit": "^0.14.0",
     "@mysten/seal": "latest",
     "@mysten/sui": "latest",
-    "@tanstack/react-query": "^5.29.2",
     "axios": "^1.17.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"

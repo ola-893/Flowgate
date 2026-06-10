@@ -12,13 +12,13 @@ module stream_engine::registry {
         id: UID,
     }
 
-    /// A premium API endpoint listed on the marketplace.
+    /// A website listed on the scraping marketplace.
     public struct Listing has key, store {
         id: UID,
         owner: address,
         domain: String,
         description: String,
-        price_per_second: u64, // USDC (with 6 decimals)
+        price_per_second: u64, // MIST per second of scraping access
     }
 
     // --- Events ---
@@ -43,7 +43,7 @@ module stream_engine::registry {
 
     // --- Functions ---
 
-    /// Register a new premium API endpoint on the Synapse Marketplace.
+    /// Register a new website on the StreamEngine marketplace.
     public fun register_website(
         domain: String,
         description: String,
