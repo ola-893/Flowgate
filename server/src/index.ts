@@ -93,7 +93,7 @@ app.get('/api/providers/:id/earnings', (req, res) => {
 
 /** Health check */
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'StreamEngine Gateway', providers: getProviders().length });
+  res.json({ status: 'ok', service: 'FlowGate Gateway', providers: getProviders().length });
 });
 
 // ============================================================
@@ -202,7 +202,7 @@ app.get('/api/premium/bloomberg/feed', requireX402Payment, (req, res) => {
 
 app.listen(PORT, () => {
   const providers = getProviders();
-  console.log(`\n🚀 StreamEngine Gateway listening on http://localhost:${PORT}`);
+  console.log(`\n🚀 FlowGate Gateway listening on http://localhost:${PORT}`);
   console.log(`\n📋 Registry: ${providers.length} websites listed`);
   providers.forEach(p => {
     console.log(`   → ${p.name} | ${p.ratePerSecond} MIST/sec | GET ${p.endpoint}`);

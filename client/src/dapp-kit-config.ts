@@ -1,0 +1,19 @@
+import { createDAppKit } from '@mysten/dapp-kit-core';
+import { BaseClient } from '@mysten/sui/client';
+
+// BaseClient is marked abstract in the type definitions but is concrete at runtime.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const SuiClient = BaseClient as any;
+
+export const dAppKit = createDAppKit({
+  networks: ['mainnet', 'testnet'] as const,
+  defaultNetwork: 'mainnet',
+  createClient: (network) =>
+    new SuiClient({
+      url:
+        network === 'testnet'
+          ? 'https://fullnode.testnet.sui.io:443'
+          : 'https://fullnode.mainnet.sui.io:443',
+    }),
+  enableBurnerWallet: true,
+});

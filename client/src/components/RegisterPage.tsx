@@ -1,0 +1,528 @@
+import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Endpoint, EndpointType } from "../types";
+import { 
+  ArrowLeft, 
+  ChevronRight, 
+  Database, 
+  Cpu, 
+  FileCode, 
+  Lock, 
+  Layers, 
+  AlertTriangle,
+  Wallet,
+  Zap,
+  Check
+} from "lucide-react";
+
+interface RegisterPageProps {
+  onAddEndpoint: (endpoint: Endpoint) => void;
+}
+
+export default function RegisterPage({ onAddEndpoint }: RegisterPageProps) {
+  const navigate = useNavigate();
+  const [step, setStep] = useState(1);
+  
+  // Endpoint details
+  const [name, setName] = useState("");
+  const [provider, setProvider] = useState("");
+  const [type, setType] = useState<EndpointType>("stream");
+  const [description, setDescription] = useState("");
+  const [endpointUrl, setEndpointUrl] = useState("");
+  
+  // Pricing model details
+  const [price, setPrice] = useState("0.10");
+  const [unit, setUnit] = useState("1K Ticks");
+  const [apiKeyRequired, setApiKeyRequired] = useState(false);
+
+  // Form errors
+  const [error, setError] = useState("");
+  const [isDeploying, setIsDeploying] = useState(false);
+  const [deploymentSuccess, setDeploymentSuccess] = useState(false);
+
+  // Suggested units based on type
+  React.useEffect(() => {
+    if (type === "stream") setUnit("1K Ticks");
+    else if (type === "compute") setUnit("inference step");
+    else if (type === "api") setUnit("1M Tokens");
+  }, [type]);
+
+  const handleNextStep1 = () => {
+    if (!name.trim()) {
+      setError("Endpoint callsing or identifier is required");
+      return;
+    }
+    if (!provider.trim()) {
+      setError("Provider or publishing authority is required");
+      return;
+    }
+    if (!description.trim()) {
+      setError("A concise specifications text summary is required");
+      return;
+    }
+    if (!endpointUrl.trim()) {
+      setError("Active routing endpoint URL is required");
+      return;
+    }
+    setError("");
+    setStep(2);
+  };
+
+  const handleNextStep2 = () => {
+    const parsedPrice = parseFloat(price);
+    if (isNaN(parsedPrice) || parsedPrice <= 0) {
+      setError("Set a valid positive price in SUI");
+      return;
+    }
+    setError("");
+    setStep(3);
+  };
+
+  const handleDeploy = async () => {
+    setIsDeploying(true);
+    
+    try {
+      // POST to backend registry
+      const res = await fetch("http://localhost:3001/api/providers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          providerAddress: "0x0000000000000000000000000000000000000000000000000000000000001234",
+          name: provider,
+          websiteUrl: endpointUrl,
+          ratePerSecond: parseFloat(price),
+          description,
+          category: type === "stream" ? "Data Feed" : type === "compute" ? "Compute" : "API",
+        }),
+      });
+      const listing = await res.json();
+
+      // Also add locally for immediate UI update
+      const newEp: Endpoint = {
+        id: listing.id || name.toLowerCase().replace(/_/g, "-") + "-" + Math.floor(Math.random() * 1000),
+        name: name.toUpperCase().replace(/\s+/g, "_"),
+        type,
+        status: "active",
+        price: parseFloat(price),
+        unit,
+        dataProvider: provider,
+        latency: Math.floor(Math.random() * 80) + 10,
+        throughput: (Math.random() * 200 + 10).toFixed(1) + " MB/s",
+        rating: 4.8 + Math.random() * 0.2,
+        uptime: parseFloat((99.5 + Math.random() * 0.49).toFixed(2)),
+        description,
+        endpointUrl,
+        inputs: ["request_body", "auth_token"],
+        outputs: ["stream_chunk", "gas_receipt"],
+        apiKeyRequired,
+        totalRequests: 0,
+        activeConsumers: 0,
+        gasSui: 0.02
+      };
+
+      onAddEndpoint(newEp);
+    } catch {
+      // Fallback: add locally even if backend is offline
+      const newEp: Endpoint = {
+        id: name.toLowerCase().replace(/_/g, "-") + "-" + Math.floor(Math.random() * 1000),
+        name: name.toUpperCase().replace(/\s+/g, "_"),
+        type,
+        status: "active",
+        price: parseFloat(price),
+        unit,
+        dataProvider: provider,
+        latency: Math.floor(Math.random() * 80) + 10,
+        throughput: (Math.random() * 200 + 10).toFixed(1) + " MB/s",
+        rating: 4.8 + Math.random() * 0.2,
+        uptime: parseFloat((99.5 + Math.random() * 0.49).toFixed(2)),
+        description,
+        endpointUrl,
+        inputs: ["request_body", "auth_token"],
+        outputs: ["stream_chunk", "gas_receipt"],
+        apiKeyRequired,
+        totalRequests: 0,
+        activeConsumers: 0,
+        gasSui: 0.02
+      };
+      onAddEndpoint(newEp);
+    } finally {
+      setIsDeploying(false);
+      setDeploymentSuccess(true);
+    }
+  };
+
+  return (
+    <div className="pb-16 max-w-4xl">
+      
+      {/* Breadcrumb line */}
+      <div className="flex items-center gap-2 text-xs font-sans text-stone-500 mb-6">
+        <span onClick={() => navigate("/")} className="hover:text-black cursor-pointer transition-colors font-semibold">Flowgate</span>
+        <span>/</span>
+        <span onClick={() => navigate("/directory")} className="hover:text-black cursor-pointer transition-colors">Browse Data</span>
+        <span>/</span>
+        <span className="text-stone-400">Register</span>
+      </div>
+
+      {/* Flag Header */}
+      <div className="flex items-center gap-4 mb-8 border-b border-stone-300 pb-6">
+        <button 
+          onClick={() => {
+            if (step > 1 && !deploymentSuccess) setStep(step - 1);
+            else navigate("/directory");
+          }} 
+          className="p-2.5 border border-stone-300 bg-white hover:bg-stone-50 hover:border-[#1C1A17] transition-all rounded-full flex items-center justify-center shadow-sm"
+        >
+          <ArrowLeft className="w-4 h-4 text-stone-700" />
+        </button>
+        <div>
+          <h1 className="font-sans text-3xl font-bold text-[#1C1A17]">
+            Register a New Endpoint
+          </h1>
+          <p className="text-sm font-sans text-stone-500 mt-0.5">
+            Add your data source or API to the FlowGate directory.
+          </p>
+        </div>
+      </div>
+
+      {/* Stepper Wizard Bar */}
+      <div className="grid grid-cols-3 gap-3 mb-10">
+        {[              { id: 1, label: "Details" },
+          { id: 2, label: "Pricing" },
+          { id: 3, label: "Deploy" }
+        ].map((s) => (
+          <div key={s.id} className="flex flex-col gap-1.5">
+            <div className={`h-1 transition-all duration-300 ${
+              step >= s.id ? "bg-[#8C2C16]" : "bg-stone-200"
+            }`} />
+            <span className={`text-xs font-sans ${
+              step >= s.id ? "text-stone-700 font-bold" : "text-stone-400"
+            }`}>{s.label}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Error notification banner */}
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 border border-red-300 rounded-xl gap-3 flex items-start text-sm font-sans text-red-900">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
+          <div className="flex flex-col">              <span className="font-bold">Validation Error</span>
+            <p className="text-[11px] mt-0.5 leading-normal text-red-700">{error}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Main Form container */}
+      <div className="border border-stone-200 bg-white p-8 shadow-sm">
+        
+        {/* STEP 1: Metadata inputs */}
+        {step === 1 && !deploymentSuccess && (
+          <div className="flex flex-col gap-6">
+            <div className="border-b border-stone-150 pb-3">
+              <h2 className="font-sans font-semibold text-lg text-[#1C1A17]">Endpoint Details</h2>
+              <p className="text-sm font-sans text-stone-500">Basic information about your endpoint</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-sans text-stone-500 font-medium">Endpoint Name *</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Market Data Feed"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="bg-white border border-stone-300 focus:border-stone-800 outline-none px-3.5 py-2.5 text-sm font-sans text-[#1C1A17] rounded-full"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-sans text-stone-500 font-medium">Provider Name *</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g. Quantic Labs"
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value)}
+                  className="bg-white border border-stone-300 focus:border-stone-800 outline-none px-3.5 py-2.5 text-sm font-sans text-[#1C1A17] rounded-full"
+                />
+              </div>
+            </div>
+
+            {/* Node category items selector */}
+            <div className="flex flex-col gap-3">
+              <label className="text-xs font-sans text-stone-500 font-medium">Category</label>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {[
+                  { id: "stream", label: "Data Feed", desc: "Continuous real-time data streams", icon: <Database /> },
+                  { id: "compute", label: "Compute", desc: "GPU or LLM inference endpoints", icon: <Cpu /> },
+                  { id: "api", label: "API", desc: "REST or gRPC client endpoints", icon: <FileCode /> }
+                ].map((cat) => (
+                  <div 
+                    key={cat.id}
+                    onClick={() => setType(cat.id as EndpointType)}
+                    className={`p-4 border text-left cursor-pointer transition-all ${
+                      type === cat.id 
+                        ? "bg-[#FCFBF9] border-stone-800 text-[#1C1A17]" 
+                        : "bg-white border-stone-200 text-stone-500 hover:border-stone-350 hover:text-black"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`p-1.5 ${type === cat.id ? "bg-stone-200 text-black" : "bg-stone-100 text-stone-400"}`}>
+                        {React.cloneElement(cat.icon, { className: "w-4 h-4" })}
+                      </span>
+                      <span className="text-xs font-sans font-semibold tracking-wide">{cat.label}</span>
+                    </div>
+                    <p className="text-xs font-sans opacity-80 leading-snug">{cat.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-sans text-stone-500 font-medium">Description *</label>
+              <textarea 
+                rows={3}
+                placeholder="Describe what this endpoint provides..."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="bg-white border border-stone-300 focus:border-stone-800 outline-none px-3.5 py-2.5 text-sm font-sans text-[#1C1A17] rounded-xl resize-none leading-relaxed"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-sans text-stone-500 font-medium">Endpoint URL *</label>
+              <input 
+                type="text" 
+                placeholder="e.g. https://api.example.com/v1/data"
+                value={endpointUrl}
+                onChange={(e) => setEndpointUrl(e.target.value)}
+                className="bg-white border border-stone-300 focus:border-stone-800 outline-none px-3.5 py-2.5 text-sm font-sans text-[#1C1A17] rounded-full"
+              />
+            </div>
+
+            <div className="flex justify-end pt-4 border-t border-stone-100">
+              <button 
+                onClick={handleNextStep1}
+                className="px-5 py-3 bg-[#1C1A17] hover:bg-[#2E2E38] text-[#FAF9F5] text-sm font-sans font-bold rounded-full transition-all flex items-center gap-2 shadow-md hover:shadow-lg active:scale-95 cursor-pointer"
+              >
+                Next: Set Pricing
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 2: Pricing configuration Details */}
+        {step === 2 && !deploymentSuccess && (
+          <div className="flex flex-col gap-6">
+            <div className="border-b border-stone-150 pb-3">
+              <h2 className="font-sans font-semibold text-lg text-[#1C1A17]">Set Pricing</h2>
+              <p className="text-sm font-sans text-stone-500">Choose how consumers are charged</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
+              <div className="flex flex-col gap-5">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-sans text-stone-500 font-medium">Price per unit (SUI) *</label>
+                  <div className="relative">
+                    <div className="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-sans text-stone-500 font-bold">SUI</div>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      placeholder="0.10"
+                      value={price}
+                      onChange={(e) => setPrice(e.target.value)}
+                      className="w-full bg-white border border-stone-300 focus:border-stone-800 outline-none pl-12 pr-4 py-2.5 text-sm font-sans text-[#1C1A17] font-bold rounded-full"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-sans text-stone-500 font-medium">Unit *</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. per second, per request"
+                    value={unit}
+                    onChange={(e) => setUnit(e.target.value)}
+                    className="bg-white border border-stone-300 focus:border-stone-800 outline-none px-3.5 py-2.5 text-sm font-sans text-[#1C1A17] rounded-full"
+                  />
+                  <p className="text-xs font-sans text-stone-400">What consumers are charged per</p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-4 p-5 bg-[#FAF9F5] border border-stone-200">
+                <div className="flex items-center justify-between mb-2 pb-2 border-b border-stone-200">
+                  <span className="text-xs font-sans text-stone-500 font-medium">Access Settings</span>
+                  <span className="text-xs font-sans px-2 py-0.5 bg-stone-200 text-stone-700 font-bold rounded-full">Auth</span>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <input 
+                    type="checkbox" 
+                    id="api-key"
+                    checked={apiKeyRequired}
+                    onChange={(e) => setApiKeyRequired(e.target.checked)}
+                    className="mt-1 accent-stone-800 w-4 h-4 border-stone-300"
+                  />
+                  <label htmlFor="api-key" className="text-sm font-sans text-stone-600 leading-relaxed selection:bg-transparent">
+                    <span className="font-bold text-[#1C1A17] block text-sm">Require API key</span>
+                    Requires consumers to initialize active private signature codes before downloading continuous streams. Prevents Sybil exhaustion.
+                  </label>
+                </div>
+
+                <div className="border-t border-stone-200 pt-3 flex flex-col gap-1.5 text-sm font-sans text-stone-500">
+                  <div className="flex justify-between">
+                    <span>Registry fee:</span>
+                    <span className="text-emerald-800 font-bold">0.002 SUI / request</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Gas estimate:</span>
+                    <span className="text-stone-700 font-bold">0.02 SUI</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-between pt-6 border-t border-stone-100 mt-4">                <button 
+                  onClick={() => setStep(1)}
+                  className="px-5 py-2.5 bg-transparent hover:bg-[#1C1A17]/5 text-[#1C1A17] border border-[#1C1A17]/30 rounded-full text-sm font-sans font-bold transition-all cursor-pointer"
+              >
+                Back
+              </button>                <button 
+                  onClick={handleNextStep2}
+                  className="px-5 py-3 bg-[#1C1A17] hover:bg-[#2E2E38] text-[#FAF9F5] text-sm font-sans font-bold rounded-full transition-all flex items-center gap-2 shadow-md hover:shadow-lg active:scale-95 cursor-pointer"
+                >
+                  Next: Deploy
+                  <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP 3: Wallet Connect & Deploy Details */}
+        {step === 3 && !deploymentSuccess && (
+          <div className="flex flex-col gap-6">
+            <div className="border-b border-stone-150 pb-3">
+              <h2 className="font-sans font-semibold text-lg text-[#1C1A17]">Review & Deploy</h2>
+              <p className="text-sm font-sans text-stone-500">Sign and publish to the Sui network</p>
+            </div>
+
+            <div className="flex flex-col gap-5">
+              
+              {/* Simulated Wallet Widget */}
+              <div className="p-6 bg-[#FAF9F5] border border-stone-250">
+                <div className="flex items-center justify-between border-b border-stone-200 pb-3 mb-4">
+                  <div className="flex items-center gap-3">
+                    <Wallet className="w-5 h-5 text-[#8C2C16]" />
+                    <div>
+                      <span className="text-xs font-sans text-stone-500 block font-medium">Wallet Address</span>
+                      <span className="text-sm font-sans text-[#1C1A17] font-bold select-all">sui:addr_8ab9c02ff...99a0c1</span>
+                    </div>
+                  </div>
+                  <span className="text-sm font-sans text-stone-500 font-medium">Network:</span>
+                  <span className="text-xs font-sans px-2 py-0.5 border border-[#8C2C16]/20 bg-[#8C2C16]/5 text-[#8C2C16] font-bold rounded-full">Mainnet</span>
+                </div>
+
+                <div className="flex items-center justify-between text-sm font-sans mb-4">
+                  <span className="text-stone-500 font-medium">Balance:</span>
+                  <span className="text-base text-stone-800 font-bold">1,482.49 SUI</span>
+                </div>
+
+                <div className="p-4 border-l-2 border-[#8C2C16] bg-stone-100/50 flex flex-col gap-1.5 text-sm font-sans text-stone-600">
+                  <div className="flex justify-between">
+                    <span>Escrow lock fee:</span>
+                    <span className="text-stone-800 font-bold">5.00 SUI</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Gas fee:</span>
+                    <span className="text-stone-800">0.10 SUI</span>
+                  </div>
+                  <div className="border-t border-stone-200 my-1 pt-2 flex justify-between text-sm font-bold text-[#1C1A17]">
+                    <span>Total cost:</span>
+                    <span className="text-stone-900 font-sans text-base font-black">5.10 SUI</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-4 bg-amber-50 border border-amber-200 text-sm font-sans text-amber-900 flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 shrink-0 text-amber-700 mt-0.5" />
+                <p className="leading-relaxed text-xs">
+                  Deploying registers your endpoint in the FlowGate directory. You can reclaim the lock deposit at any time.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-between pt-6 border-t border-stone-100 mt-4">                <button 
+                  onClick={() => setStep(2)}
+                  className="px-5 py-2.5 bg-transparent hover:bg-[#1C1A17]/5 text-[#1C1A17] border border-[#1C1A17]/30 rounded-full text-sm font-sans font-bold transition-all cursor-pointer"
+                  disabled={isDeploying}
+              >
+                Back
+              </button>                <button 
+                  onClick={handleDeploy}
+                  disabled={isDeploying}
+                  className="px-6 py-3.5 bg-[#8C2C16] hover:bg-[#A63A23] text-sm font-sans font-bold text-white rounded-full transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 cursor-pointer"
+                >
+                {isDeploying ? (
+                  <>
+                    <span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                    Publishing...
+                  </>
+                ) : (
+                  <>
+                    Sign & Publish
+                    <Zap className="w-4 h-4 text-white fill-current shrink-0" />
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* SUCCESS VIEW SCREEN */}
+        {deploymentSuccess && (
+          <div className="flex flex-col items-center text-center gap-6 py-6">
+            <div className="w-16 h-16 rounded-full bg-emerald-50 border border-emerald-300 flex items-center justify-center relative">
+              <Check className="w-6 h-6 text-emerald-800" />
+            </div>
+
+            <div>
+              <h2 className="font-sans font-bold text-3xl text-[#1C1A17]">Registration Complete</h2>
+              <p className="text-sm font-sans text-stone-500 mt-1.5">Your endpoint is now live on FlowGate</p>
+            </div>
+
+            <div className="max-w-md w-full bg-[#FAF9F5] border border-stone-200 p-5 text-sm font-sans text-left flex flex-col gap-2.5 my-2 rounded-xl">
+              <div className="flex justify-between text-stone-500">
+                <span>Endpoint name:</span>
+                <span className="text-stone-900 font-bold">{name}</span>
+              </div>
+              <div className="flex justify-between text-stone-500">
+                <span>Price:</span>
+                <span className="text-stone-800 font-bold">{parseFloat(price).toFixed(4)} SUI per {unit}</span>
+              </div>
+              <div className="flex justify-between text-stone-500">
+                <span>Escrow hash:</span>
+                <span className="text-stone-700 font-bold">0x49a1d9b...e2920f</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3.5 w-full justify-center max-w-md mt-4">
+              <button 
+                onClick={() => navigate("/directory")}
+                className="w-full py-3.5 bg-transparent hover:bg-[#1C1A17]/5 text-[#1C1A17] border border-[#1C1A17]/30 rounded-full text-sm font-sans font-bold transition-all cursor-pointer"
+              >
+                Back to Directory
+              </button>
+              <button 
+                onClick={() => navigate("/provider")}
+                className="w-full py-3.5 bg-[#1C1A17] hover:bg-[#2E2E38] text-[#FAF9F5] text-sm font-sans font-bold rounded-full transition-all flex items-center justify-center gap-2 shadow-md hover:shadow-lg active:scale-95 cursor-pointer"
+              >
+                Open Provider Dashboard
+              </button>
+            </div>
+
+          </div>
+        )}
+
+      </div>
+
+    </div>
+  );
+}
