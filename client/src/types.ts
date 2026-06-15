@@ -44,6 +44,7 @@ export interface Agent {
   status: "active" | "paused" | "depleted";
   createdAt: string;
   totalRequests: number;
+  activeStreamId?: string;
 }
 
 // Backend API response types
