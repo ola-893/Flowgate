@@ -7,13 +7,58 @@ import {
   getProviders,
   registerProvider,
 } from './registry/providers.ts';
-import { readStreamObjectState } from './x402/streams.ts';
+import { readStreamObjectState, client as suiClient } from './x402/streams.ts';
+import crypto from 'crypto';
+import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
+import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
+import { PACKAGE_ID } from './x402/middleware.ts';
+
+// Use a real secret in production. For the hackathon demo, this is fine.
+const ENCRYPTION_SECRET = (process.env.AGENT_KEY_SECRET || 'streamengine-hackathon-secret!!').padEnd(32).slice(0, 32);
+
+function generateAgentWallet(): { address: string; privateKeyBech32: string } {
+  const keypair = new Ed25519Keypair();
+  return {
+    address: keypair.getPublicKey().toSuiAddress(),
+    privateKeyBech32: keypair.getSecretKey(), // returns bech32 string like suiprivkey1q...
+  };
+}
+
+function encryptPrivateKey(privateKeyBech32: string): string {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_SECRET), iv);
+  let encrypted = cipher.update(privateKeyBech32, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  return iv.toString('hex') + ':' + encrypted;
+}
+
+function decryptPrivateKey(encryptedData: string): string {
+  const [ivHex, encryptedHex] = encryptedData.split(':');
+  const iv = Buffer.from(ivHex, 'hex');
+  const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_SECRET), iv);
+  let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
+}
+
+function getKeypairForAgent(agent: Agent): Ed25519Keypair {
+  const privateKeyBech32 = decryptPrivateKey(agent.encryptedPrivateKey);
+  const { secretKey } = decodeSuiPrivateKey(privateKeyBech32);
+  return Ed25519Keypair.fromSecretKey(secretKey);
+}
 
 const PORT = parseInt(process.env.PORT || '3001');
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+interface AgentStream {
+  streamId: string;
+  endpoint: string;
+  ratePerSecondMist: number;
+  openedAt: string;
+}
 
 interface Agent {
   id: string;
@@ -22,7 +67,9 @@ interface Agent {
   purpose: 'research' | 'trading' | 'monitoring' | 'content' | 'custom';
   budgetMist: number;
   spentMist: number;
-  activeStreamId?: string;
+  walletAddress: string;
+  encryptedPrivateKey: string;
+  activeStreams: AgentStream[];
   createdAt: string;
 }
 const agentRegistry: Map<string, Agent> = new Map();
@@ -36,6 +83,10 @@ app.post('/api/agents', (req, res) => {
   if (!name || !purpose || budgetMist === undefined) {
     return res.status(400).json({ error: 'Missing required fields: name, purpose, budgetMist' });
   }
+
+  const { address, privateKeyBech32 } = generateAgentWallet();
+  const encryptedPrivateKey = encryptPrivateKey(privateKeyBech32);
+
   const newAgent: Agent = {
     id: `agent-${Date.now()}`,
     name,
@@ -43,10 +94,16 @@ app.post('/api/agents', (req, res) => {
     purpose,
     budgetMist: Number(budgetMist),
     spentMist: 0,
+    walletAddress: address,
+    encryptedPrivateKey,
+    activeStreams: [],
     createdAt: new Date().toISOString()
   };
+  
   agentRegistry.set(newAgent.id, newAgent);
-  res.status(201).json(newAgent);
+  
+  const { encryptedPrivateKey: _, ...agentWithoutSecret } = newAgent;
+  res.status(201).json(agentWithoutSecret);
 });
 
 app.get('/api/agents', (req, res) => {
@@ -57,32 +114,237 @@ app.get('/api/agents/:id', async (req, res) => {
   const agent = agentRegistry.get(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
   
-  const response: any = { ...agent };
-  
-  if (agent.activeStreamId) {
-    try {
-      const stream = await readStreamObjectState(agent.activeStreamId);
-      response.remainingBalanceMist = Number(stream.balanceMist);
-    } catch (e) {
-      console.error('Failed to read stream object state for agent', agent.id, e);
-    }
-  }
-  
-  res.json(response);
+  const { encryptedPrivateKey: _, ...agentWithoutSecret } = agent;
+  res.json(agentWithoutSecret);
 });
 
-app.patch('/api/agents/:id/stream', (req, res) => {
+app.get('/api/agents/:id/balance', async (req, res) => {
+  const agent = agentRegistry.get(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  const coins = await suiClient.getCoins({
+    owner: agent.walletAddress,
+    coinType: '0x2::sui::SUI',
+  });
+
+  const totalBalance = coins.data.reduce(
+    (sum, coin) => sum + parseInt(coin.balance),
+    0
+  );
+
+  return res.json({
+    agentId: agent.id,
+    walletAddress: agent.walletAddress,
+    balanceMist: totalBalance,
+    balanceSui: totalBalance / 1_000_000_000,
+  });
+});
+
+app.post('/api/agents/:id/access', async (req, res) => {
+  const agent = agentRegistry.get(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  const { endpoint } = req.body;
+  if (!endpoint) return res.status(400).json({ error: 'endpoint required' });
+
+  const providerRegistry = getProviders();
+  const provider = providerRegistry.find(p => p.endpoint === endpoint);
+  if (!provider) return res.status(404).json({ error: 'Provider not found for endpoint' });
+
+  const coins = await suiClient.getCoins({ owner: agent.walletAddress, coinType: '0x2::sui::SUI' });
+  const balance = coins.data.reduce((sum, c) => sum + parseInt(c.balance), 0);
+  const minimumRequired = provider.ratePerSecond * 3600;
+
+  if (balance < minimumRequired) {
+    return res.status(402).json({
+      error: 'Insufficient agent wallet balance',
+      walletAddress: agent.walletAddress,
+      balanceMist: balance,
+      requiredMist: minimumRequired,
+      message: `Fund the agent wallet with at least ${minimumRequired / 1_000_000_000} SUI`,
+    });
+  }
+
+  const keypair = getKeypairForAgent(agent);
+  const { Transaction } = await import('@mysten/sui/transactions');
+  const tx = new Transaction();
+
+  const depositAmount = provider.ratePerSecond * 3600;
+  const [depositCoin] = tx.splitCoins(tx.gas, [depositAmount]);
+
+  tx.moveCall({
+    target: `${PACKAGE_ID}::stream::create_stream`,
+    arguments: [
+      depositCoin,
+      tx.pure.address(provider.providerAddress),
+      tx.pure.u64(provider.ratePerSecond),
+      tx.pure.vector('u8', new TextEncoder().encode(JSON.stringify({ agentId: agent.id }))),
+      tx.object('0x6'),
+    ],
+    typeArguments: ['0x2::sui::SUI'],
+  });
+
+  const result = await suiClient.signAndExecuteTransaction({
+    transaction: tx,
+    signer: keypair,
+    options: { showEffects: true, showEvents: true }
+  });
+
+  const streamObjectId = result.effects?.created?.[0]?.reference?.objectId;
+  if (!streamObjectId) {
+    return res.status(500).json({ error: 'Stream creation failed — no object ID in result' });
+  }
+
+  agent.activeStreams.push({
+    streamId: streamObjectId,
+    endpoint: endpoint,
+    ratePerSecondMist: provider.ratePerSecond,
+    openedAt: new Date().toISOString(),
+  });
+  agent.spentMist += depositAmount;
+
+  const dataResponse = await fetch(`http://localhost:${PORT}${endpoint}`, {
+    headers: { 'x-streamengine-stream-id': streamObjectId },
+  });
+  const data = await dataResponse.json();
+
+  return res.json({
+    streamId: streamObjectId,
+    creationTx: result.digest,
+    depositMist: depositAmount,
+    data,
+  });
+});
+
+app.get('/api/agents/:id/streams', async (req, res) => {
+  const agent = agentRegistry.get(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  const streamsWithBalance = await Promise.all(
+    agent.activeStreams.map(async (stream) => {
+      try {
+        const obj = await suiClient.getObject({
+          id: stream.streamId,
+          options: { showContent: true },
+        });
+        const fields = (obj.data?.content as any)?.fields;
+        const balanceMist = parseInt(fields?.balance?.fields?.value ?? '0');
+        return { ...stream, balanceMist, balanceSui: balanceMist / 1_000_000_000 };
+      } catch {
+        return { ...stream, balanceMist: 0, balanceSui: 0, error: 'Could not read on-chain balance' };
+      }
+    })
+  );
+
+  return res.json({ agentId: agent.id, streams: streamsWithBalance });
+});
+
+app.delete('/api/agents/:id/streams/:streamId', async (req, res) => {
+  const agent = agentRegistry.get(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  const { streamId } = req.params;
+  const streamRecord = agent.activeStreams.find(s => s.streamId === streamId);
+  if (!streamRecord) return res.status(404).json({ error: 'Stream not found on agent' });
+
+  const keypair = getKeypairForAgent(agent);
+  const { Transaction } = await import('@mysten/sui/transactions');
+  const tx = new Transaction();
+
+  tx.moveCall({
+    target: `${PACKAGE_ID}::stream::close_stream`,
+    arguments: [
+      tx.object(streamId),
+      tx.object('0x6'),
+    ],
+    typeArguments: ['0x2::sui::SUI'],
+  });
+
+  const result = await suiClient.signAndExecuteTransaction({
+    transaction: tx,
+    signer: keypair,
+  });
+
+  agent.activeStreams = agent.activeStreams.filter(s => s.streamId !== streamId);
+
+  return res.json({ closed: true, streamId, refundTx: result.digest });
+});
+
+app.post('/api/agents/:id/start', async (req, res) => {
+  const agent = agentRegistry.get(req.params.id);
+  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  const providers = getProviders();
+
+  const purposeToCategory: Record<string, string[]> = {
+    research: ['Research', 'News', 'General'],
+    trading: ['Finance', 'Social Media'],
+    custom: ['Social Media', 'Finance', 'Research', 'News', 'General'],
+  };
+  const relevantCategories = purposeToCategory[agent.purpose] || [];
+  const matchedProviders = providers.filter(p =>
+    relevantCategories.some(cat => p.category?.toLowerCase() === cat.toLowerCase())
+  );
+
+  if (matchedProviders.length === 0) {
+    return res.json({ message: 'No matching providers found for agent purpose', started: false });
+  }
+
+  const coins = await suiClient.getCoins({ owner: agent.walletAddress, coinType: '0x2::sui::SUI' });
+  const balance = coins.data.reduce((sum, c) => sum + parseInt(c.balance), 0);
+
+  if (balance === 0) {
+    return res.status(402).json({
+      error: 'Agent wallet is empty',
+      walletAddress: agent.walletAddress,
+      message: 'Fund the agent wallet before starting autonomous mode',
+    });
+  }
+
+  const affordable = matchedProviders.find(p => balance >= p.ratePerSecond * 60);
+  if (!affordable) {
+    return res.status(402).json({ error: 'Insufficient balance for any matched provider' });
+  }
+
+  const accessRes = await fetch(`http://localhost:${PORT}/api/agents/${agent.id}/access`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ endpoint: affordable.endpoint }),
+  });
+  const accessData = await accessRes.json();
+
+  return res.json({
+    started: true,
+    provider: affordable.name,
+    ...accessData,
+  });
+});
+
+app.post('/api/agents/:id/fund-demo', async (req, res) => {
   const agent = agentRegistry.get(req.params.id);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
   
-  const { streamId, amountMist } = req.body;
-  if (!streamId || amountMist === undefined) {
-    return res.status(400).json({ error: 'Missing required fields: streamId, amountMist' });
+  const { amountMist } = req.body;
+  if (!amountMist) return res.status(400).json({ error: 'Missing amountMist' });
+
+  // Use a test wallet to fund the agent
+  const testPrivateKeyHex = process.env.TEST_WALLET_PRIVATE_KEY || 'e6027c95a2858b99c7162985fde44cd8b898a39a671f657a731dfeddae11aeb2'; // 32-byte hex for a dummy wallet that has SUI
+  const cleanHex = testPrivateKeyHex.startsWith('0x') ? testPrivateKeyHex.slice(2) : testPrivateKeyHex;
+  const testWalletKeypair = Ed25519Keypair.fromSecretKey(Buffer.from(cleanHex, 'hex'));
+
+  try {
+    const { Transaction } = await import('@mysten/sui/transactions');
+    const tx = new Transaction();
+    const [coin] = tx.splitCoins(tx.gas, [amountMist]);
+    tx.transferObjects([coin], tx.pure.address(agent.walletAddress));
+    
+    const result = await suiClient.signAndExecuteTransaction({ transaction: tx, signer: testWalletKeypair });
+    await suiClient.waitForTransaction({ digest: result.digest });
+    
+    res.json({ success: true, digest: result.digest, fundedAmountMist: amountMist });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Funding failed', message: error.message });
   }
-  
-  agent.activeStreamId = streamId;
-  agent.spentMist += Number(amountMist);
-  res.json(agent);
 });
 
 // ============================================================
