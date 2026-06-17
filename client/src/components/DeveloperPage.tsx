@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useToast } from "../lib/toast-context";
 
 import { 
   Terminal, 
@@ -12,6 +13,7 @@ interface DeveloperPageProps {}
 
 export default function DeveloperPage(_props: DeveloperPageProps) {
   const navigate = useNavigate();
+  const { addToast } = useToast();
   const [activeTab, setActiveTab] = useState<"js" | "python">("js");
   const [explorerEndpoint, setExplorerEndpoint] = useState("GET /v1/directory/active");
   const [isLoading, setIsLoading] = useState(false);
@@ -21,6 +23,7 @@ export default function DeveloperPage(_props: DeveloperPageProps) {
   const handleCopy = (address: string, id: string) => {
     navigator.clipboard.writeText(address);
     setCopiedAddress(id);
+    addToast({ variant: "success", title: "Copied to clipboard" });
     setTimeout(() => setCopiedAddress(null), 2000);
   };
 

@@ -340,7 +340,13 @@ app.post('/api/agents/:id/fund-demo', async (req, res) => {
     
     res.json({ success: true, digest: result.digest, fundedAmountMist: amountMist });
   } catch (error: any) {
-    res.status(500).json({ error: 'Funding failed', message: error.message });
+    const msg = error?.message || String(error);
+    console.error(`[fund-demo] Failed to fund agent ${agent.id}:`, msg);
+    if (msg.includes('Insufficient') || msg.includes('not enough') || msg.includes('Balance')) {
+      res.status(402).json({ error: 'Insufficient test wallet balance', message: 'The demo test wallet has no SUI. Set SUI_PRIVATE_KEY env var to a funded wallet.' });
+    } else {
+      res.status(500).json({ error: 'Funding failed', message: msg });
+    }
   }
 });
 

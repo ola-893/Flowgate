@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useCurrentAccount, useDAppKit } from "@mysten/dapp-kit-react";
 import { Transaction } from "@mysten/sui/transactions";
 import { API_BASE } from "../types";
+import { useToast } from "../lib/toast-context";
 import {
   Wallet,
   AlertTriangle,
@@ -72,6 +73,7 @@ export default function PremiumFeedsPage() {
   const currentAccount = useCurrentAccount();
   const isWalletConnected = !!currentAccount;
   const dAppKit = useDAppKit();
+  const { addToast } = useToast();
 
   const [feedStates, setFeedStates] = useState<Record<string, FeedState>>({});
 
@@ -102,8 +104,10 @@ export default function PremiumFeedsPage() {
 
       const data = await res.json();
       updateFeedState(feed.id, { status: "success", data });
+      addToast({ variant: "success", title: "Feed retrieved", message: `${feed.name} data loaded successfully.` });
     } catch (err: any) {
       updateFeedState(feed.id, { status: "error", error: err.message || "Request failed" });
+      addToast({ variant: "error", title: "Fetch failed", message: err.message || "Request failed" });
     }
   };
 
@@ -143,8 +147,10 @@ export default function PremiumFeedsPage() {
 
       const data = await res.json();
       updateFeedState(feed.id, { status: "success", data });
+      addToast({ variant: "success", title: "Payment successful", message: `${feed.name} data unlocked.` });
     } catch (err: any) {
       updateFeedState(feed.id, { status: "error", error: err.message || "Payment failed" });
+      addToast({ variant: "error", title: "Payment failed", message: err.message || "Transaction could not be completed." });
     }
   };
 

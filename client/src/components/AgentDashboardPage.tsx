@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { Agent } from "../types";
+import { useToast } from "../lib/toast-context";
 import {
   getAgentBalance,
   listAgentStreams,
@@ -26,6 +27,8 @@ import {
   RefreshCw,
   Zap,
   Send,
+  Copy,
+  Check,
 } from "lucide-react";
 
 function AgentBalancePoller({
@@ -75,6 +78,7 @@ export default function AgentDashboardPage({
   onUpdateAgent,
 }: AgentDashboardPageProps) {
   const navigate = useNavigate();
+  const { addToast } = useToast();
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
 
   // Per-agent stream data fetched from backend
@@ -92,6 +96,7 @@ export default function AgentDashboardPage({
   // Fund modal state
   const [fundModalAgent, setFundModalAgent] = useState<string | null>(null);
   const [fundAmountSui, setFundAmountSui] = useState<number>(1);
+  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
 
   // Fetch streams for a specific agent
   const fetchStreams = useCallback(async (agentId: string) => {
@@ -131,11 +136,14 @@ export default function AgentDashboardPage({
         const balance = await getAgentBalance(agentId);
         setAgentBalances((prev) => ({ ...prev, [agentId]: balance }));
         onUpdateAgent(agentId, {});
+        addToast({ variant: "success", title: "Agent started", message: "Streams are now active." });
       } else {
         setActionError(result.message || "Agent could not start — no matching providers");
+        addToast({ variant: "error", title: "Agent failed to start", message: result.message || "No matching providers found." });
       }
     } catch (err: any) {
       setActionError(err.message);
+      addToast({ variant: "error", title: "Start failed", message: err.message });
     } finally {
       setLoadingAction(null);
     }
@@ -154,9 +162,14 @@ export default function AgentDashboardPage({
         setAgentBalances((prev) => ({ ...prev, [agentId]: balance }));
         onUpdateAgent(agentId, {});
         setFundModalAgent(null);
+        addToast({ variant: "success", title: "Agent funded", message: `${fundAmountSui} SUI deposited successfully.` });
+      } else {
+        addToast({ variant: "error", title: "Funding failed", message: "Server returned an unsuccessful response." });
       }
     } catch (err: any) {
-      setActionError(err.message);
+      const errorMessage = err.message || "Unknown error";
+      setActionError(errorMessage);
+      addToast({ variant: "error", title: "Funding failed", message: errorMessage });
     } finally {
       setLoadingAction(null);
     }
@@ -173,8 +186,10 @@ export default function AgentDashboardPage({
       // Refresh balance
       const balance = await getAgentBalance(agentId);
       setAgentBalances((prev) => ({ ...prev, [agentId]: balance }));
+      addToast({ variant: "success", title: "Stream closed", message: "The stream has been terminated." });
     } catch (err: any) {
       setActionError(err.message);
+      addToast({ variant: "error", title: "Close failed", message: err.message });
     } finally {
       setLoadingAction(null);
     }
@@ -369,7 +384,23 @@ export default function AgentDashboardPage({
                             </div>
                             <div className="flex items-center gap-2 font-mono text-xs text-[#1C1A17] bg-stone-50 p-2.5 rounded-lg border border-stone-100">
                               <Wallet className="w-3.5 h-3.5 text-stone-400 shrink-0" />
-                              <span className="truncate">{agent.walletAddress}</span>
+                              <span className="truncate flex-1 min-w-0">{agent.walletAddress}</span>
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(agent.walletAddress || "");
+                                  setCopiedAddress(agent.id);
+                                  addToast({ variant: "success", title: "Copied to clipboard" });
+                                  setTimeout(() => setCopiedAddress(null), 2000);
+                                }}
+                                className="shrink-0 p-1 text-stone-400 hover:text-stone-700 transition-colors cursor-pointer"
+                                title="Copy wallet address"
+                              >
+                                {copiedAddress === agent.id ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
+                              </button>
                             </div>
                             {/* Live balance from backend */}
                             {balance && (
@@ -420,7 +451,10 @@ export default function AgentDashboardPage({
                                 try {
                                   const b = await getAgentBalance(agent.id);
                                   setAgentBalances((prev) => ({ ...prev, [agent.id]: b }));
-                                } catch {}
+                                  addToast({ variant: "success", title: "Balance refreshed", message: `Wallet: ${b.balanceSui.toFixed(4)} SUI` });
+                                } catch {
+                                  addToast({ variant: "error", title: "Refresh failed", message: "Could not fetch balance." });
+                                }
                                 setLoadingAction(null);
                               }}
                               className="px-4 py-2 bg-stone-50 hover:bg-stone-100 text-stone-600 border border-stone-200 rounded-lg text-xs font-sans font-bold transition-all flex items-center gap-1.5"

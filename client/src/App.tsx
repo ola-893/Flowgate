@@ -16,6 +16,7 @@ import {
   ChevronRight
 } from "lucide-react";
 
+import { ToastProvider } from "./lib/toast-context";
 import LandingPage from "./components/LandingPage";
 import OnboardingPage from "./components/OnboardingPage";
 import AgentCreatePage from "./components/AgentCreatePage";
@@ -44,11 +45,13 @@ export default function App() {
   // Agent state management (declared early so routing effects can reference them)
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
+  const [serverReachable, setServerReachable] = useState<boolean | null>(null);
 
   const fetchAgents = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/agents`);
       if (res.ok) {
+        setServerReachable(true);
         const data = await res.json();
         const mapped = data.map((a: any) => ({
           id: a.id,
@@ -67,6 +70,7 @@ export default function App() {
       }
     } catch (e) {
       console.error(e);
+      setServerReachable(false);
     } finally {
       setAgentsLoaded(true);
     }
@@ -86,21 +90,22 @@ export default function App() {
 
   // Auto-navigate when wallet connects on landing page
   // Has agents → premium, no agents → onboarding
-  // Gated on agentsLoaded to avoid race condition (agents start as [])
+  // Gated on agentsLoaded AND serverReachable (not false) to avoid redirecting to
+  // /onboarding when the server is simply unreachable (agents still exist in the DB)
   const prevConnectedRef = React.useRef(isWalletConnected);
   useEffect(() => {
-    if (isWalletConnected && !prevConnectedRef.current && location.pathname === "/" && agentsLoaded) {
+    if (isWalletConnected && !prevConnectedRef.current && location.pathname === "/" && agentsLoaded && serverReachable !== false) {
       navigate(agents.length > 0 ? "/premium" : "/onboarding");
     }
     prevConnectedRef.current = isWalletConnected;
-  }, [isWalletConnected, location.pathname, navigate, agents.length, agentsLoaded]);
+  }, [isWalletConnected, location.pathname, navigate, agents.length, agentsLoaded, serverReachable]);
 
   // If a connected user lands on / (e.g. sidebar Home button), route appropriately
   useEffect(() => {
-    if (isWalletConnected && location.pathname === "/" && agentsLoaded) {
+    if (isWalletConnected && location.pathname === "/" && agentsLoaded && serverReachable !== false) {
       navigate(agents.length > 0 ? "/premium" : "/onboarding", { replace: true });
     }
-  }, [isWalletConnected, location.pathname, agents.length, navigate, agentsLoaded]);
+  }, [isWalletConnected, location.pathname, agents.length, navigate, agentsLoaded, serverReachable]);
 
   // Fetch real SUI balance from chain — tries mainnet, falls back to testnet
   useEffect(() => {
@@ -218,6 +223,7 @@ export default function App() {
   // Full-bleed pages (landing, onboarding) render without sidebar
   if (isFullscreenPage) {
     return (
+      <ToastProvider>
       <div className="bg-[#E5E5ED] min-h-screen">
         <Routes>
           <Route path="/" element={
@@ -249,11 +255,13 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
+      </ToastProvider>
     );
   }
 
   // App pages with sidebar
   return (
+    <ToastProvider>
     <div className="flex flex-col md:flex-row min-h-screen bg-[#E5E5ED] text-[#1C1A17] antialiased font-sans selection:bg-[#E8DCC4] selection:text-black">
 
       {/* MOBILE HEADER BAR */}
@@ -307,7 +315,7 @@ export default function App() {
                 </div>
                 <div className="flex justify-between items-baseline mt-1 font-mono">
                   <span className="text-xs text-[#7C7567]">SUI Balance</span>
-                  <span className="font-serif text-sm font-bold text-[#1C1A17]">
+                  <span className=" text-sm font-bold text-[#1C1A17]">
                     {balanceLoading ? "..." : `${suiBalance.toFixed(4)} SUI`}
                   </span>
                 </div>
@@ -422,6 +430,12 @@ export default function App() {
                 <Navigate to="/" replace />
               ) : !agentsLoaded ? (
                 <div className="flex items-center justify-center min-h-[60vh]"><span className="text-sm text-stone-400 font-sans">Loading agents...</span></div>
+              ) : !serverReachable ? (
+                <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+                  <p className="text-sm text-stone-500 font-sans">Server is unreachable. Your agents are stored in the database.</p>
+                  <p className="text-xs text-stone-400 font-mono">Start the server with <code className="bg-stone-200 px-1.5 py-0.5 rounded">bash dev.sh</code></p>
+                  <button onClick={fetchAgents} className="px-4 py-2 text-xs font-mono border border-stone-300 bg-white hover:bg-stone-100 rounded-full transition-all cursor-pointer">Retry</button>
+                </div>
               ) : agents.length === 0 ? (
                 <Navigate to="/onboarding" replace />
               ) : (
@@ -447,6 +461,7 @@ export default function App() {
         />
       )}
     </div>
+    </ToastProvider>
   );
 }
 

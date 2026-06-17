@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Endpoint, ProviderEarnings, StreamBalance, API_BASE } from "../types";
+import { useToast } from "../lib/toast-context";
 import { TrendingUp, Wallet } from "lucide-react";
 
 interface ProviderPageProps {
@@ -10,6 +11,7 @@ interface ProviderPageProps {
 
 export default function ProviderPage({ endpoints, isWalletConnected }: ProviderPageProps) {
   const navigate = useNavigate();
+  const { addToast } = useToast();
   const providerEndpoints = endpoints;
   const [selectedId, setSelectedId] = useState<string>(
     providerEndpoints.length > 0 ? providerEndpoints[0].id : ""
@@ -44,8 +46,14 @@ export default function ProviderPage({ endpoints, isWalletConnected }: ProviderP
         if (!res.ok) throw new Error("Stream not found");
         return res.json();
       })
-      .then((data: StreamBalance) => setStreamBalance(data))
-      .catch((err) => setStreamError(err.message || "Failed to fetch balance"))
+      .then((data: StreamBalance) => {
+        setStreamBalance(data);
+        addToast({ variant: "success", title: "Balance retrieved", message: `Stream balance: ${data.balanceSui.toFixed(9)} SUI` });
+      })
+      .catch((err) => {
+        setStreamError(err.message || "Failed to fetch balance");
+        addToast({ variant: "error", title: "Query failed", message: err.message || "Stream not found" });
+      })
       .finally(() => setStreamLoading(false));
   };
 

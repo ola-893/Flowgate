@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Endpoint, EndpointType, API_BASE } from "../types";
+import { useToast } from "../lib/toast-context";
 import { 
   ArrowLeft, 
   ChevronRight, 
@@ -10,7 +11,8 @@ import {
   AlertTriangle,
   Wallet,
   Zap,
-  Check
+  Check,
+  Copy
 } from "lucide-react";
 
 interface RegisterPageProps {
@@ -30,6 +32,7 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
   const [type, setType] = useState<EndpointType>("stream");
   const [description, setDescription] = useState("");
   const [endpointUrl, setEndpointUrl] = useState("");
+  const [endpointPath, setEndpointPath] = useState("");
   
   // Pricing model details
   const [price, setPrice] = useState("0.10");
@@ -40,6 +43,8 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
   const [error, setError] = useState("");
   const [isDeploying, setIsDeploying] = useState(false);
   const [deploymentSuccess, setDeploymentSuccess] = useState(false);
+  const [registeredEndpoint, setRegisteredEndpoint] = useState("");
+  const { addToast } = useToast();
 
   // Suggested units based on type
   React.useEffect(() => {
@@ -63,6 +68,10 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
     }
     if (!endpointUrl.trim()) {
       setError("Endpoint URL is required");
+      return;
+    }
+    if (endpointPath.trim() && !endpointPath.trim().startsWith("/")) {
+      setError("Endpoint path must start with / (e.g. /api/premium/my-feed/feed)");
       return;
     }
     setError("");
@@ -95,12 +104,15 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
           providerAddress: walletAddress,
           name: provider,
           websiteUrl: endpointUrl,
+          endpoint: endpointPath.trim() || undefined,
           ratePerSecond: parseFloat(price),
           description,
           category: type === "stream" ? "Data Feed" : type === "compute" ? "Compute" : "API",
         }),
       });
       const listing = await res.json();
+      const finalPath = listing.endpoint || endpointPath.trim() || `/api/premium/listed/${provider.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}/feed`;
+      setRegisteredEndpoint(finalPath);
 
       // Also add locally for immediate UI update
       const newEp: Endpoint = {
@@ -126,8 +138,12 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
       };
 
       onAddEndpoint(newEp);
+      addToast({ variant: "success", title: "Endpoint registered", message: `Gateway path: ${finalPath}` });
     } catch {
+      addToast({ variant: "error", title: "Backend unreachable", message: "Saved locally — will sync when server is back online." });
       // Fallback: add locally even if backend is offline
+      const fallbackPath = endpointPath.trim() || `/api/premium/listed/${provider.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}/feed`;
+      setRegisteredEndpoint(fallbackPath);
       const newEp: Endpoint = {
         id: name.toLowerCase().replace(/_/g, "-") + "-" + Math.floor(Math.random() * 1000),
         name: name.toUpperCase().replace(/\s+/g, "_"),
@@ -318,6 +334,18 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
               />
             </div>
 
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-sans text-stone-500 font-medium">Gateway Path</label>
+              <input 
+                type="text" 
+                placeholder="e.g. /api/premium/my-feed/feed (auto-generated if empty)"
+                value={endpointPath}
+                onChange={(e) => setEndpointPath(e.target.value)}
+                className="bg-white border border-stone-300 focus:border-stone-800 outline-none px-3.5 py-2.5 text-sm font-sans text-[#1C1A17] rounded-full"
+              />
+              <p className="text-xs font-sans text-stone-400">The path agents will hit to access your data. Leave empty for auto-generated path.</p>
+            </div>
+
             <div className="flex justify-end pt-4 border-t border-stone-100">
               <button 
                 onClick={handleNextStep1}
@@ -499,6 +527,23 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
                 <span>Provider:</span>
                 <span className="text-stone-700 font-bold">{truncatedAddress}</span>
               </div>
+              {registeredEndpoint && (
+                <div className="flex items-center justify-between text-stone-500 pt-2 border-t border-stone-200">
+                  <span>Gateway path:</span>
+                  <div className="flex items-center gap-1.5">
+                    <code className="text-xs font-mono text-[#8C2C16] bg-[#8C2C16]/5 px-2 py-0.5 rounded select-all">{registeredEndpoint}</code>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(registeredEndpoint);
+                        addToast({ variant: "success", title: "Copied to clipboard" });
+                      }}
+                      className="p-1 text-stone-400 hover:text-stone-700 transition-colors cursor-pointer"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3.5 w-full justify-center max-w-md mt-4">

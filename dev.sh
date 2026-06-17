@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
-# Start server and client dev servers in parallel
-# Trap Ctrl+C to kill both processes on exit
+# ============================================================
+#  StreamEngine Local Dev Server
+#  Starts both server (port 3001) and client (port 3000)
+#  without Docker.
+# ============================================================
 
 cleanup() {
   echo -e "\n🛑 Shutting down..."
@@ -13,18 +16,35 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM
 
+# --- Ensure dependencies are installed ---
+ensure_deps() {
+  local dir=$1
+  local name=$2
+  if [ ! -d "$dir/node_modules" ]; then
+    echo "📦 Installing $name dependencies..."
+    (cd "$dir" && npm install)
+  fi
+}
+
+ensure_deps server "server"
+ensure_deps client "client"
+
+# --- Start server ---
 echo "🚀 Starting server (port 3001)..."
 (cd server && npm run dev) &
 SERVER_PID=$!
 
+# --- Start client ---
 echo "🌐 Starting client (port 3000)..."
 (cd client && npm run dev) &
 CLIENT_PID=$!
 
 echo ""
-echo "✅ Both servers running:"
+echo "✅ Both dev servers running (no Docker):"
 echo "   Server: http://localhost:3001"
 echo "   Client: http://localhost:3000"
+echo ""
+echo "   Press Ctrl+C to stop both."
 echo ""
 
 # Wait for either process to exit

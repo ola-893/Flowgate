@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { Agent, API_BASE } from "../types";
+import { useToast } from "../lib/toast-context";
 import {
   Bot,
   ArrowRight,
@@ -46,6 +47,7 @@ export default function AgentCreatePage({
   onDeploy,
 }: AgentCreatePageProps) {
   const navigate = useNavigate();
+  const { addToast } = useToast();
   const [step, setStep] = useState(1);
   const [agent, setAgent] = useState<AgentConfig>({
     name: "",
@@ -95,8 +97,10 @@ export default function AgentCreatePage({
       };
       onDeploy(newAgent);
       setDeployed(true);
+      addToast({ variant: "success", title: "Agent deployed", message: `"${agent.name}" is live with ${agent.budgetSui.toFixed(2)} SUI escrow.` });
     } catch (e) {
       setDeployError("Network error — is the backend running?");
+      addToast({ variant: "error", title: "Deploy failed", message: "Network error — is the backend running?" });
     }
   };
 
