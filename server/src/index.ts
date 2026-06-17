@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { requireX402Payment } from './x402/middleware.ts';
@@ -14,7 +15,7 @@ import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { PACKAGE_ID } from './x402/middleware.ts';
 
 // Use a real secret in production. For the hackathon demo, this is fine.
-const ENCRYPTION_SECRET = (process.env.AGENT_KEY_SECRET || 'streamengine-hackathon-secret!!').padEnd(32).slice(0, 32);
+const ENCRYPTION_SECRET = (process.env.AGENT_WALLET_ENCRYPTION_KEY || 'streamengine-hackathon-secret!!').padEnd(32).slice(0, 32);
 
 function generateAgentWallet(): { address: string; privateKeyBech32: string } {
   const keypair = new Ed25519Keypair();
@@ -328,7 +329,7 @@ app.post('/api/agents/:id/fund-demo', async (req, res) => {
   if (!amountMist) return res.status(400).json({ error: 'Missing amountMist' });
 
   // Use a test wallet to fund the agent
-  const testPrivateKeyHex = process.env.TEST_WALLET_PRIVATE_KEY || 'e6027c95a2858b99c7162985fde44cd8b898a39a671f657a731dfeddae11aeb2'; // 32-byte hex for a dummy wallet that has SUI
+  const testPrivateKeyHex = process.env.SUI_PRIVATE_KEY || 'e6027c95a2858b99c7162985fde44cd8b898a39a671f657a731dfeddae11aeb2'; // 32-byte hex for a dummy wallet that has SUI
   const cleanHex = testPrivateKeyHex.startsWith('0x') ? testPrivateKeyHex.slice(2) : testPrivateKeyHex;
   const testWalletKeypair = Ed25519Keypair.fromSecretKey(Buffer.from(cleanHex, 'hex'));
 

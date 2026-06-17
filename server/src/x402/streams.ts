@@ -1,6 +1,6 @@
 import { SuiJsonRpcClient } from '@mysten/sui/jsonRpc';
 
-const SUI_RPC_URL = process.env.SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
+const SUI_RPC_URL = process.env.SUI_RPC_URL || `https://fullnode.${process.env.SUI_NETWORK || 'testnet'}.sui.io:443`;
 
 export const client = new SuiJsonRpcClient({ url: SUI_RPC_URL, network: 'testnet' });
 

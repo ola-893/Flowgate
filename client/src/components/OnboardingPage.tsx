@@ -51,10 +51,7 @@ export default function OnboardingPage({
               <span className="font-mono text-xs tracking-widest font-black uppercase">FLOWGATE</span>
             </div>
             <button
-              onClick={() => {
-                localStorage.setItem("flowgate_onboarded", "true");
-                navigate("/");
-              }}
+              onClick={() => navigate("/")}
               className="px-3 py-1.5 text-[10px] font-mono border border-stone-300 bg-[#FAF9F5] hover:border-[#1C1A17] uppercase transition-all rounded-full"
             >
               Skip
@@ -143,11 +140,10 @@ export default function OnboardingPage({
 
                 <div className="flex flex-col gap-3">
                   <h2 className="font-serif text-3xl font-semibold tracking-tight text-[#1C1A17]">
-                    Connect your Sui wallet
+                    Your Sui wallet is Connected
                   </h2>
                   <p className="text-sm text-stone-600 max-w-md leading-relaxed">
-                    Link your Sui wallet to register endpoints, fund escrows, or receive payments.
-                    You can also skip and explore as a guest.
+                    Click on continue
                   </p>
                 </div>
 
@@ -262,10 +258,7 @@ export default function OnboardingPage({
                     ← Back
                   </button>
                 <button
-                  onClick={() => {
-                    localStorage.setItem("flowgate_onboarded", "true");
-                    setStep(4);
-                  }}
+                  onClick={() => setStep(4)}
                   disabled={!selectedRole}
                   className="py-3 px-8 bg-[#1C1A17] hover:bg-[#2E2E38] disabled:opacity-40 text-white font-mono text-xs font-bold tracking-wider uppercase rounded-full flex items-center gap-2 shadow-lg transition-all"
                 >
@@ -296,7 +289,7 @@ export default function OnboardingPage({
                   <p className="text-sm text-stone-600 max-w-md leading-relaxed">
                     {selectedRole === "provider"
                       ? "Head to the Register page to list your first endpoint, or browse the directory to see what's live."
-                      : "Create your AI agent to start paying for and scraping data from registered FlowGate endpoints, or browse the directory first."
+                      : "Create your AI agent to start paying for and scraping data from registered endpoints."
                     }
                   </p>
                 </div>
@@ -327,12 +320,12 @@ export default function OnboardingPage({
                         Create AI Agent
                         <ArrowRight className="w-4 h-4" />
                       </button>
-                      <button
+                      {/* <button
                         onClick={() => navigate("/premium")}
                         className="py-3.5 px-8 bg-transparent hover:bg-[#1C1A17]/5 text-[#1C1A17] border border-[#1C1A17]/30 rounded-full text-xs font-mono font-bold uppercase transition-all"
                       >
                         Premium Feeds
-                      </button>
+                      </button> */}
                     </>
                   )}
                 </div>

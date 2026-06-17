@@ -7,8 +7,8 @@ import {
 } from '../registry/providers.ts';
 import { readStreamObjectState } from './streams.ts';
 
-const SUI_RPC_URL = process.env.SUI_RPC_URL || 'https://fullnode.testnet.sui.io:443';
-export const PACKAGE_ID = process.env.SUI_DATA_GATE_PACKAGE_ID || '0xb05b3964df8b88a86cda6b192893399966014af9dd6fc6beb26f1343a0495495';
+const SUI_RPC_URL = process.env.SUI_RPC_URL || `https://fullnode.${process.env.SUI_NETWORK || 'testnet'}.sui.io:443`;
+export const PACKAGE_ID = process.env.SYNAPSE_PACKAGE_ID || '0xb05b3964df8b88a86cda6b192893399966014af9dd6fc6beb26f1343a0495495';
 const client = new SuiJsonRpcClient({ url: SUI_RPC_URL, network: 'testnet' });
 
 interface StreamEngineRequest extends Request {

@@ -39,23 +39,68 @@ export default function App() {
   const [suiBalance, setSuiBalance] = useState<number>(0);
   const [balanceLoading, setBalanceLoading] = useState(false);
 
-  // Check if user has completed onboarding before
-  const hasCompletedOnboarding = localStorage.getItem("flowgate_onboarded") === "true";
-
-  // Auto-navigate when wallet connects on landing page
-  // First-time users → onboarding, returning users → dashboard
-  const prevConnectedRef = React.useRef(isWalletConnected);
-  useEffect(() => {
-    if (isWalletConnected && !prevConnectedRef.current && location.pathname === "/") {
-      navigate(hasCompletedOnboarding ? "/premium" : "/onboarding");
-    }
-    prevConnectedRef.current = isWalletConnected;
-  }, [isWalletConnected, location.pathname, navigate, hasCompletedOnboarding]);
-
-
-
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
 
+  // Agent state management (declared early so routing effects can reference them)
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
+
+  const fetchAgents = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/agents`);
+      if (res.ok) {
+        const data = await res.json();
+        const mapped = data.map((a: any) => ({
+          id: a.id,
+          name: a.name,
+          description: a.description || "",
+          purpose: a.purpose,
+          maxBudgetSui: a.budgetMist / 1_000_000_000,
+          currentSpendSui: a.spentMist / 1_000_000_000,
+          createdAt: a.createdAt,
+          activeStreamId: a.activeStreamId || a.activeStreams?.[0]?.streamId,
+          remainingBalanceMist: a.remainingBalanceMist,
+          walletAddress: a.walletAddress,
+          connectedEndpoints: a.connectedEndpoints || a.activeStreams?.map((s: any) => s.endpoint) || [],
+        }));
+        setAgents(mapped);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setAgentsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAgents();
+  }, [fetchAgents]);
+
+  const handleAddAgent = (agent: Agent) => {
+    setAgents((prev) => [agent, ...prev]);
+  };
+
+  const handleUpdateAgent = (id: string, updates: Partial<Agent>) => {
+    setAgents((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)));
+  };
+
+  // Auto-navigate when wallet connects on landing page
+  // Has agents → premium, no agents → onboarding
+  // Gated on agentsLoaded to avoid race condition (agents start as [])
+  const prevConnectedRef = React.useRef(isWalletConnected);
+  useEffect(() => {
+    if (isWalletConnected && !prevConnectedRef.current && location.pathname === "/" && agentsLoaded) {
+      navigate(agents.length > 0 ? "/premium" : "/onboarding");
+    }
+    prevConnectedRef.current = isWalletConnected;
+  }, [isWalletConnected, location.pathname, navigate, agents.length, agentsLoaded]);
+
+  // If a connected user lands on / (e.g. sidebar Home button), route appropriately
+  useEffect(() => {
+    if (isWalletConnected && location.pathname === "/" && agentsLoaded) {
+      navigate(agents.length > 0 ? "/premium" : "/onboarding", { replace: true });
+    }
+  }, [isWalletConnected, location.pathname, agents.length, navigate, agentsLoaded]);
 
   // Fetch real SUI balance from chain — tries mainnet, falls back to testnet
   useEffect(() => {
@@ -155,55 +200,6 @@ export default function App() {
     setProviders((prev) => [newEp, ...prev]);
   };
 
-
-  // Agent state management
-  const [agents, setAgents] = useState<Agent[]>([]);
-
-  const fetchAgents = useCallback(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/agents`);
-      if (res.ok) {
-        const data = await res.json();
-        const mapped = data.map((a: any) => ({
-          id: a.id,
-          name: a.name,
-          description: a.description || "",
-          purpose: a.purpose,
-          maxBudgetSui: a.budgetMist / 1_000_000_000,
-          currentSpendSui: a.spentMist / 1_000_000_000,
-          createdAt: a.createdAt,
-          activeStreamId: a.activeStreamId,
-          remainingBalanceMist: a.remainingBalanceMist,
-          walletAddress: a.walletAddress,
-          connectedEndpoints: a.connectedEndpoints,
-        }));
-        setAgents(mapped);
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchAgents();
-  }, [fetchAgents]);
-
-  const handleAddAgent = (agent: Agent) => {
-    setAgents((prev) => [agent, ...prev]);
-  };
-
-  const handleUpdateAgent = (id: string, updates: Partial<Agent>) => {
-    setAgents((prev) => prev.map((a) => (a.id === id ? { ...a, ...updates } : a)));
-  };
-
-  // If a connected user with agents lands on /, redirect to dashboard
-  // (handles the sidebar Home button case where wallet is already connected)
-  useEffect(() => {
-    if (isWalletConnected && location.pathname === "/" && agents.length > 0) {
-      navigate("/premium", { replace: true });
-    }
-  }, [isWalletConnected, location.pathname, agents.length, navigate]);
-
   // Check if we're on the landing or onboarding page (no sidebar)
   const isFullscreenPage = location.pathname === "/" || location.pathname === "/onboarding" || location.pathname === "/agent/create";
 
@@ -237,14 +233,19 @@ export default function App() {
               walletAddress={walletAddress}
               suiBalance={suiBalance}
             />
-          } />            <Route path="/agent/create" element={
+          } />
+          <Route path="/agent/create" element={
+            isWalletConnected ? (
               <AgentCreatePage
                 isWalletConnected={isWalletConnected}
                 walletAddress={walletAddress}
                 suiBalance={suiBalance}
                 onDeploy={handleAddAgent}
               />
-            } />
+            ) : (
+              <Navigate to="/" replace />
+            )
+          } />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
@@ -392,26 +393,48 @@ export default function App() {
         <div className="absolute top-0 right-1/4 w-[1px] h-full bg-stone-200/45 pointer-events-none hidden lg:block" />
         <div className="max-w-6xl mx-auto relative z-10">
           <Routes>
-            <Route path="/premium" element={<PremiumFeedsPage />} />
+            {/* Protected: wallet required */}
+            <Route path="/premium" element={
+              isWalletConnected ? <PremiumFeedsPage /> : <Navigate to="/" replace />
+            } />
             <Route path="/register" element={
-              <RegisterPage
-                onAddEndpoint={handleAddEndpoint}
-                walletAddress={walletAddress}
-                isWalletConnected={isWalletConnected}
-                suiBalance={suiBalance}
-              />
+              isWalletConnected ? (
+                <RegisterPage
+                  onAddEndpoint={handleAddEndpoint}
+                  walletAddress={walletAddress}
+                  isWalletConnected={isWalletConnected}
+                  suiBalance={suiBalance}
+                />
+              ) : (
+                <Navigate to="/" replace />
+              )
             } />
             <Route path="/provider" element={
-              <ProviderPage endpoints={providers} isWalletConnected={isWalletConnected} />
+              isWalletConnected ? (
+                <ProviderPage endpoints={providers} isWalletConnected={isWalletConnected} />
+              ) : (
+                <Navigate to="/" replace />
+              )
             } />
+            {/* Protected: wallet required + must have agents */}
             <Route path="/agent/dashboard" element={
-              <AgentDashboardPage
-                agents={agents}
-                onUpdateAgent={handleUpdateAgent}
-              />
+              !isWalletConnected ? (
+                <Navigate to="/" replace />
+              ) : !agentsLoaded ? (
+                <div className="flex items-center justify-center min-h-[60vh]"><span className="text-sm text-stone-400 font-sans">Loading agents...</span></div>
+              ) : agents.length === 0 ? (
+                <Navigate to="/onboarding" replace />
+              ) : (
+                <AgentDashboardPage
+                  agents={agents}
+                  onUpdateAgent={handleUpdateAgent}
+                />
+              )
             } />
             <Route path="/developer" element={<DeveloperPage />} />
-            <Route path="*" element={<Navigate to="/premium" replace />} />
+            <Route path="*" element={
+              <Navigate to={isWalletConnected ? "/premium" : "/"} replace />
+            } />
           </Routes>
         </div>
       </main>
