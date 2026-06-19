@@ -10,8 +10,10 @@ import {
   startAgent,
   fundAgent,
   deleteAgent,
+  discoverProviders,
   AgentBalance,
   AgentStreamsResponse,
+  DiscoveryCandidate,
   listProviders,
   ProviderListing,
 } from "../lib/api";
@@ -21,13 +23,13 @@ import {
   ArrowLeft,
   Activity,
   DollarSign,
-  Globe,
   Wallet,
   Key,
   Play,
   Trash2,
   RefreshCw,
   Zap,
+
   Send,
   Copy,
   Check,
@@ -39,6 +41,18 @@ import {
   ShieldCheck,
   Database,
 } from "lucide-react";
+
+function formatDuration(totalSec: number): string {
+  if (totalSec < 60) return `${totalSec}s`;
+  if (totalSec < 3600) {
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${m}m ${s}s`;
+  }
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  return `${h}h ${m}m`;
+}
 
 function AgentBalancePoller({
   agentId,
@@ -121,9 +135,23 @@ export default function AgentDetailPage({
   const [fundAmountSui, setFundAmountSui] = useState<number>(1);
   const [copiedAddress, setCopiedAddress] = useState(false);
 
+  // Discovery
+  const [discoveryResults, setDiscoveryResults] = useState<DiscoveryCandidate[] | null>(null);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+
+  // Start modal with duration selector
+  const [startModalOpen, setStartModalOpen] = useState(false);
+  const [selectedDuration, setSelectedDuration] = useState<number>(3600);
+
   // Delete confirmation
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
+
+  // Activity log
+  // Stream filter
+  const [streamFilter, setStreamFilter] = useState<"active" | "finished">("active");
+  const [streamStatuses, setStreamStatuses] = useState<Record<string, "streaming" | "depleted">>({});
 
   // Activity log
   const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([]);
@@ -194,10 +222,7 @@ export default function AgentDetailPage({
     (sum, stream) => sum + (stream.balanceSui ?? 0),
     0
   );
-  const selectedStream = streams[0];
-  const selectedProvider =
-    selectedStream &&
-    providers.find((provider) => provider.endpoint === selectedStream.endpoint);
+  const providerRateMist = providers.length > 0 ? providers[0].ratePerSecond : 100_000;
 
   const formatMistRate = (rateMist: number) =>
     `${(rateMist / 1_000_000_000).toFixed(9).replace(/0+$/, "").replace(/\.$/, "")} SUI/s`;
@@ -208,7 +233,33 @@ export default function AgentDetailPage({
 
   // ─── Handlers ──────────────────────────────────────────────────────────
 
-  const handleStartAgent = async () => {
+  const handleDiscover = async () => {
+    setDiscoveryLoading(true);
+    setDiscoveryError(null);
+    try {
+      const result = await discoverProviders(agent.id);
+      setDiscoveryResults(result.recommendations);
+      addLogEntry({
+        agentId: agent.id,
+        agentName,
+        type: "stream",
+        title: `Discovered ${result.recommendations.length} providers`,
+        detail: `Top pick: ${result.recommendations[0]?.name || 'none'} (score ${result.recommendations[0]?.score || 0})`,
+        meta: {
+          balance: `${result.balanceSui.toFixed(4)} SUI`,
+          total: `${result.totalProviders} providers scanned`,
+        },
+      });
+    } catch (err: any) {
+      setDiscoveryError(err.message);
+      addToast({ variant: "error", title: "Discovery failed", message: err.message });
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  };
+
+  const handleStartAgent = async (durationSeconds: number) => {
+    setStartModalOpen(false);
     setLoadingAction("start");
     setActionError(null);
     try {
@@ -217,9 +268,9 @@ export default function AgentDetailPage({
         agentName,
         type: "start",
         title: "Starting agent...",
-        detail: `Requesting stream for ${agentName}`,
+        detail: `Requesting stream for ${agentName} (${durationSeconds ? `${durationSeconds}s` : 'default'} duration)`,
       });
-      const result = await startAgent(agent.id);
+      const result = await startAgent(agent.id, durationSeconds);
       if (result.started) {
         await fetchStreams(agent.id);
         const b = await getAgentBalance(agent.id);
@@ -514,102 +565,74 @@ export default function AgentDetailPage({
 
       <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-6 items-start">
         <main className="space-y-5 min-w-0">
-          <section>
-            <div className="flex items-center justify-between mb-3">
+          <section>              <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Radio className={`w-4 h-4 ${streams.length > 0 ? "text-emerald-500 animate-pulse" : "text-stone-300"}`} />
                 <span className="text-xs font-sans text-stone-400 font-medium">Live Operation</span>
               </div>
-              {selectedProvider && (
-                <span className="text-[10px] font-mono text-stone-400">
-                  {selectedProvider.name} / {formatMistRate(selectedProvider.ratePerSecond)}
-                </span>
-              )}
-            </div>
-            {selectedStream ? (
-              <StreamingSessionPanel
-                agentId={agent.id}
-                streamId={selectedStream.streamId}
-                providerName={providerNameForEndpoint(selectedStream.endpoint)}
-              />
-            ) : (
-              <div className="p-8 bg-[#FAF9F6] border border-stone-200 rounded-lg text-center">
-                <Radio className="w-9 h-9 text-stone-200 mx-auto mb-3" />
-                <p className="text-sm font-sans font-bold text-[#1C1A17]">No stream open</p>
-                <p className="text-xs text-stone-400 mt-1">Start the agent to create a Sui stream and unlock a protected feed.</p>
-              </div>
-            )}
-          </section>
-
-          <section className="p-5 bg-[#FAF9F6] border border-stone-200 rounded-lg">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Globe className="w-4 h-4 text-stone-400" />
-                <span className="text-xs font-sans text-stone-400 font-medium">Active Streams</span>
-                <span className="px-1.5 py-0.5 text-[10px] font-mono font-bold bg-stone-100 text-stone-500 rounded">
-                  {streams.length}
-                </span>
-              </div>
-              <button
-                onClick={() => fetchStreams(agent.id)}
-                className="p-1.5 text-stone-400 hover:text-stone-700 transition-colors"
-                title="Refresh streams"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            {streams.length === 0 ? (
-              <div className="py-7 text-center">
-                <Globe className="w-8 h-8 text-stone-200 mx-auto mb-2" />
-                <p className="text-xs text-stone-400 font-sans">No active streams.</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-stone-100">
-                {streams.map((stream) => (
-                  <div key={stream.streamId} className="py-3 first:pt-0 last:pb-0 flex items-center gap-3">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-sans text-sm font-bold text-[#1C1A17] truncate">
-                          {providerNameForEndpoint(stream.endpoint)}
-                        </span>
-                        <span className="text-[10px] text-stone-400 font-mono shrink-0">
-                          {formatMistRate(stream.ratePerSecondMist)}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
-                        <a
-                          href={`https://suiscan.xyz/testnet/object/${stream.streamId}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-[10px] text-[#8C2C16] font-mono hover:underline inline-flex items-center gap-0.5"
-                        >
-                          {stream.streamId.substring(0, 18)}…
-                          <ExternalLink className="w-2.5 h-2.5" />
-                        </a>
-                        {stream.balanceMist !== undefined && (
-                          <span className="text-[10px] text-stone-500 font-mono">
-                            {stream.balanceSui?.toFixed(6)} SUI
-                          </span>
-                        )}
-                      </div>
-                    </div>
+              <div className="flex items-center gap-1">
+                {(["active", "finished"] as const).map((filter) => {
+                  const count = streams.filter((s) => {
+                    const st = streamStatuses[s.streamId];
+                    return filter === "active" ? st !== "depleted" : st === "depleted";
+                  }).length;
+                  return (
                     <button
-                      onClick={() => handleCloseStream(stream.streamId)}
-                      disabled={loadingAction === `close-${stream.streamId}`}
-                      className="p-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg transition-all disabled:opacity-50"
-                      title="Close stream"
+                      key={filter}
+                      onClick={() => setStreamFilter(filter)}
+                      className={`px-2.5 py-1 text-[10px] font-sans font-bold rounded-full border transition-all ${
+                        streamFilter === filter
+                          ? filter === "active"
+                            ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                            : "border-stone-300 bg-stone-100 text-stone-600"
+                          : "border-transparent text-stone-400 hover:text-stone-600"
+                      }`}
                     >
-                      {loadingAction === `close-${stream.streamId}` ? (
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <Trash2 className="w-3.5 h-3.5" />
-                      )}
+                      {filter === "active" ? "Active" : "Finished"}
+                      <span className="ml-1 font-mono">{count}</span>
                     </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
-            )}
+            </div>
+            {(() => {
+              const filteredStreams = streams.filter((s) => {
+                const st = streamStatuses[s.streamId];
+                return streamFilter === "active" ? st !== "depleted" : st === "depleted";
+              });
+              if (streams.length === 0) {
+                return (
+                  <div className="p-8 bg-[#FAF9F6] border border-stone-200 rounded-lg text-center">
+                    <Radio className="w-9 h-9 text-stone-200 mx-auto mb-3" />
+                    <p className="text-sm font-sans font-bold text-[#1C1A17]">No stream open</p>
+                    <p className="text-xs text-stone-400 mt-1">Start the agent to create a Sui stream and unlock a protected feed.</p>
+                  </div>
+                );
+              }
+              if (filteredStreams.length === 0) {
+                return (
+                  <div className="p-6 bg-[#FAF9F6] border border-stone-200 rounded-lg text-center">
+                    <p className="text-xs font-sans text-stone-400">
+                      No {streamFilter === "active" ? "active" : "finished"} streams yet.
+                    </p>
+                  </div>
+                );
+              }
+              return (
+                <div className="space-y-4">
+                  {filteredStreams.map((stream) => (
+                    <StreamingSessionPanel
+                      key={stream.streamId}
+                      agentId={agent.id}
+                      streamId={stream.streamId}
+                      providerName={providerNameForEndpoint(stream.endpoint)}
+                      onClose={() => handleCloseStream(stream.streamId)}
+                      onStatusChange={(sid, status) => setStreamStatuses((prev) => ({ ...prev, [sid]: status }))}
+                    />
+                  ))}
+                </div>
+              );
+            })()}
           </section>
 
           <section className="p-5 bg-[#FAF9F6] border border-stone-200 rounded-lg">
@@ -694,6 +717,54 @@ export default function AgentDetailPage({
               </div>
             )}
           </section>
+
+          {/* Discovery Results */}
+          {discoveryResults && discoveryResults.length > 0 && (
+            <section className="p-4 bg-blue-50/50 border border-blue-200 rounded-lg">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-blue-500" />
+                  <span className="text-xs font-sans text-blue-700 font-medium">Discovery Results</span>
+                </div>
+                <button onClick={() => setDiscoveryResults(null)} className="text-[10px] font-sans text-blue-400 hover:text-blue-600">clear</button>
+              </div>
+              <div className="space-y-2">
+                {discoveryResults.slice(0, 5).map((c, i) => (
+                  <div key={c.providerId} className="p-3 bg-white border border-blue-100 rounded-lg">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[10px] font-bold shrink-0">{i + 1}</span>
+                        <span className="font-sans text-xs font-bold text-[#1C1A17] truncate">{c.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="px-1.5 py-0.5 text-[10px] font-mono font-bold bg-blue-100 text-blue-700 rounded">score {c.score}</span>
+                        <span className="text-[10px] font-mono text-[#8C2C16]">{c.rateSuiPerSec.toFixed(6)} SUI/s</span>
+                      </div>
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {c.reasons.map((r, j) => (
+                        <span key={j} className="px-1.5 py-0.5 text-[9px] font-sans bg-stone-100 text-stone-500 rounded">{r}</span>
+                      ))}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        onClick={() => setStartModalOpen(true)}
+                        className="px-2.5 py-1 text-[10px] font-sans font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded transition-all"
+                      >
+                        Stream →
+                      </button>
+                      <span className="text-[10px] font-mono text-stone-400">{c.maxStreamSeconds}s max</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+          {discoveryError && (
+            <section className="p-3 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-xs font-sans text-red-600">{discoveryError}</p>
+            </section>
+          )}
         </main>
 
         <aside className="space-y-5 xl:sticky xl:top-4">
@@ -704,12 +775,20 @@ export default function AgentDetailPage({
             </div>
             <div className="grid grid-cols-2 gap-2">
               <button
-                onClick={handleStartAgent}
+                onClick={() => setStartModalOpen(true)}
                 disabled={loadingAction === "start"}
                 className="px-3 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-sans font-bold transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
               >
                 {loadingAction === "start" ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
                 Start
+              </button>
+              <button
+                onClick={handleDiscover}
+                disabled={discoveryLoading}
+                className="px-3 py-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-sans font-bold transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {discoveryLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
+                Discover
               </button>
               <button
                 onClick={() => setFundModalOpen(true)}
@@ -783,7 +862,7 @@ export default function AgentDetailPage({
             </section>
           )}
 
-          <section className="p-4 bg-[#FAF9F6] border border-stone-200 rounded-lg">
+          {/* <section className="p-4 bg-[#FAF9F6] border border-stone-200 rounded-lg">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Database className="w-4 h-4 text-stone-400" />
@@ -815,7 +894,7 @@ export default function AgentDetailPage({
             <p className="text-[10px] font-sans text-stone-400 leading-relaxed mt-3">
               On-chain stream creation and access checks are real Sui testnet calls. Feed payloads are seeded demo data, not live scrapes from X, Reddit, or Bloomberg.
             </p>
-          </section>
+          </section> */}
 
           <section className="bg-[#1C1A17] text-[#8AF2D0] p-4 rounded-lg font-mono text-[10px] space-y-1 overflow-x-auto">
             <p className="text-white/40">agent</p>
@@ -825,6 +904,124 @@ export default function AgentDetailPage({
           </section>
         </aside>
       </div>
+
+      {/* Start Modal — Duration Selector */}
+      <AnimatePresence>
+        {startModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+            onClick={() => setStartModalOpen(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-[#FAF9F6] border border-stone-200 rounded-2xl p-6 w-full max-w-md shadow-xl"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-sans text-lg font-bold text-[#1C1A17]">
+                  Start Agent
+                </h3>
+                <button
+                  onClick={() => setStartModalOpen(false)}
+                  className="p-1.5 text-stone-400 hover:text-stone-600"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p className="text-sm text-stone-500 mb-4">
+                Choose how long {agentName} should scrape data. The stream deposit is calculated at the provider rate.
+              </p>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-sans text-stone-500 font-medium">
+                    Duration
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { label: "1 min", seconds: 60 },
+                      { label: "10 min", seconds: 600 },
+                      { label: "1 hour", seconds: 3600 },
+                      { label: "6 hours", seconds: 21600 },
+                      { label: "1 day", seconds: 86400 },
+                      { label: "1 week", seconds: 604800 },
+                      { label: "2 weeks", seconds: 1209600 },
+                    ].map((opt) => (
+                      <button
+                        key={opt.label}
+                        onClick={() => setSelectedDuration(opt.seconds)}
+                        className={`py-2 border rounded-lg text-xs font-sans font-bold transition-all ${
+                          selectedDuration === opt.seconds
+                            ? "border-[#8C2C16] bg-[#8C2C16]/5 text-[#8C2C16]"
+                            : "border-stone-200 bg-white text-stone-500 hover:border-stone-300"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-2">
+                    <label className="text-[10px] font-sans text-stone-400 font-medium block mb-1">
+                      Custom (seconds)
+                    </label>
+                    <input
+                      type="number"
+                      min="60"
+                      step="60"
+                      value={selectedDuration}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        setSelectedDuration(val >= 60 ? val : 60);
+                      }}
+                      className="w-full px-4 py-3 bg-white border border-stone-200 rounded-xl font-sans text-sm text-[#1C1A17] focus:outline-none focus:border-[#8C2C16] focus:ring-1 focus:ring-[#8C2C16]/20 transition-all"
+                    />
+                    <p className="text-[10px] text-stone-400 mt-1 font-mono">
+                      {(selectedDuration / 60).toFixed(0)} minutes ({(selectedDuration / 3600).toFixed(1)} hours)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-white border border-stone-100 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-sans text-stone-400">Estimated deposit</span>
+                    <span className="font-sans text-sm font-bold text-[#8C2C16]">
+                      {((providerRateMist * selectedDuration) / 1_000_000_000).toFixed(4)} SUI
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-[10px] font-mono text-stone-400">{providerRateMist.toLocaleString()} MIST/s × {selectedDuration}s</span>
+                    <span className="text-[10px] font-mono text-stone-400">
+                      {formatDuration(selectedDuration)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setStartModalOpen(false)}
+                    className="flex-1 py-3 px-6 bg-transparent hover:bg-[#1C1A17]/5 text-[#1C1A17] border border-[#1C1A17]/30 rounded-full text-sm font-sans font-bold transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleStartAgent(selectedDuration)}
+                    className="flex-1 py-3 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-sans text-sm font-bold rounded-full flex items-center justify-center gap-2 transition-all"
+                  >
+                    <Play className="w-4 h-4" />
+                    Start Agent
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Delete Confirmation Modal */}
       <AnimatePresence>
@@ -895,7 +1092,8 @@ export default function AgentDetailPage({
                     ) : (
                       <Trash2 className="w-4 h-4" />
                     )}
-                    Delete Permanently
+                    Delete
+                    
                   </button>
                 </div>
               </div>

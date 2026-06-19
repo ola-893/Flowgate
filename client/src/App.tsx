@@ -219,10 +219,9 @@ export default function App() {
   // Sidebar navigation items
   const navigationTabs = [
     { path: "/premium", label: "Premium Feeds", num: "01", category: "Core Markets" },
-    { path: "/register", label: "Register Endpoint", num: "02", category: "Core Markets" },
-    { path: "/provider", label: "Provider Dashboard", num: "03", category: "Core Markets" },
-    { path: "/agent/dashboard", label: "My Agents", num: "05", category: "Agent Space" },
-    { path: "/developer", label: "Developer Tools", num: "06", category: "Resources" }
+    { path: "/provider", label: "Provider Dashboard", num: "02", category: "Core Markets" },
+    { path: "/agent/dashboard", label: "My Agents", num: "03", category: "Agent Space" },
+    { path: "/developer", label: "Developer Tools", num: "04", category: "Resources" }
   ];
 
   // Full-bleed pages (landing, onboarding) render without sidebar
@@ -424,7 +423,7 @@ export default function App() {
             } />
             <Route path="/provider" element={
               isWalletConnected ? (
-                <ProviderPage endpoints={providers} isWalletConnected={isWalletConnected} />
+                <ProviderPage endpoints={providers} isWalletConnected={isWalletConnected} walletAddress={walletAddress} />
               ) : (
                 <Navigate to="/" replace />
               )
@@ -496,7 +495,7 @@ function getDefaultEndpoints(): Endpoint[] {
     },
     {
       id: "reddit", name: "Reddit", type: "api", status: "active",
-      price: 0.00008, unit: "sec of access", dataProvider: "Reddit",
+      price: 0.0001, unit: "sec of access", dataProvider: "Reddit",
       latency: 15, throughput: "38.2 MB/s", rating: 4.88, uptime: 99.85,
       description: "Upvoted threads, community discussions, and niche subreddit data",
       endpointUrl: "https://reddit.com", inputs: [], outputs: [],
@@ -504,7 +503,7 @@ function getDefaultEndpoints(): Endpoint[] {
     },
     {
       id: "bloomberg", name: "Bloomberg", type: "api", status: "active",
-      price: 0.0002, unit: "sec of access", dataProvider: "Bloomberg",
+      price: 0.0001, unit: "sec of access", dataProvider: "Bloomberg",
       latency: 8, throughput: "120.8 MB/s", rating: 4.91, uptime: 99.72,
       description: "Proprietary financial news, earnings call transcripts, and market commentary",
       endpointUrl: "https://bloomberg.com", inputs: [], outputs: [],

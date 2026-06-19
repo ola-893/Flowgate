@@ -3,11 +3,12 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { requireX402Payment } from './x402/middleware.ts';
-import { saveAgent, getAgent, getAllAgents, deleteAgent as dbDeleteAgent, saveProvider, getProvider, getAllProviders, updateProviderEarnings } from './db.ts';
-import { readStreamObjectState, client as suiClient } from './x402/streams.ts';
+import { saveAgent, getAgent, getAllAgents, deleteAgent as dbDeleteAgent, saveProvider, getProvider, getProviderByEndpoint, getAllProviders, updateProviderEarnings, deleteProvider as dbDeleteProvider } from './db.ts';
+import { readStreamObjectState, extractStreamBalanceMist, client as suiClient } from './x402/streams.ts';
 import crypto from 'crypto';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
+import { verifyPersonalMessageSignature } from '@mysten/sui/verify';
 import { PACKAGE_ID } from './x402/middleware.ts';
 
 // Use a real secret in production. For the hackathon demo, this is fine.
@@ -53,9 +54,7 @@ process.on('uncaughtException', (error) => {
 });
 process.on('unhandledRejection', (reason) => {
   console.error('[FATAL] Unhandled rejection:', reason);
-});
-
-const MINIMUM_STREAM_SECONDS = 3600;
+});const MINIMUM_STREAM_SECONDS = 60; // 1 minute minimum
 const PORT = parseInt(process.env.PORT || '3001');
 const app = express();
 
@@ -66,6 +65,7 @@ interface AgentStream {
   streamId: string;
   endpoint: string;
   ratePerSecondMist: number;
+  durationSeconds: number;
   openedAt: string;
 }
 
@@ -180,8 +180,9 @@ app.post('/api/agents/:id/access', async (req, res) => {
     const agent = getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-    const { endpoint } = req.body;
+    const { endpoint, durationSeconds } = req.body;
     if (!endpoint) return res.status(400).json({ error: 'endpoint required' });
+    const streamDuration = Math.max(Number(durationSeconds) || MINIMUM_STREAM_SECONDS, MINIMUM_STREAM_SECONDS);
 
     console.log(`[access] Agent "${agent.name}" (${agent.id}) requesting access to ${endpoint}`);
 
@@ -195,7 +196,7 @@ app.post('/api/agents/:id/access', async (req, res) => {
 
     const coins = await suiClient.getCoins({ owner: agent.walletAddress, coinType: '0x2::sui::SUI' });
     const balance = coins.data.reduce((sum, c) => sum + parseInt(c.balance), 0);
-    const minimumRequired = provider.ratePerSecond * MINIMUM_STREAM_SECONDS;
+    const minimumRequired = provider.ratePerSecond * streamDuration;
     console.log(`[access] Agent wallet balance: ${balance} MIST (${balance / 1_000_000_000} SUI), minimum required: ${minimumRequired} MIST (${minimumRequired / 1_000_000_000} SUI)`);
 
     if (balance < minimumRequired) {
@@ -213,9 +214,9 @@ app.post('/api/agents/:id/access', async (req, res) => {
     const { Transaction } = await import('@mysten/sui/transactions');
     const tx = new Transaction();
 
-    const depositAmount = provider.ratePerSecond * MINIMUM_STREAM_SECONDS;
+    const depositAmount = provider.ratePerSecond * streamDuration;
     const [depositCoin] = tx.splitCoins(tx.gas, [depositAmount]);
-    console.log(`[access] Creating stream — deposit: ${depositAmount} MIST (${depositAmount / 1_000_000_000} SUI)`);
+    console.log(`[access] Creating stream — deposit: ${depositAmount} MIST (${depositAmount / 1_000_000_000} SUI), duration: ${streamDuration}s`);
 
     tx.moveCall({
       target: `${PACKAGE_ID}::stream::create_stream`,
@@ -248,6 +249,7 @@ app.post('/api/agents/:id/access', async (req, res) => {
       streamId: streamObjectId,
       endpoint: endpoint,
       ratePerSecondMist: provider.ratePerSecond,
+      durationSeconds: streamDuration,
       openedAt: new Date().toISOString(),
     });
     agent.spentMist += depositAmount;
@@ -345,30 +347,7 @@ app.post('/api/agents/:id/start', async (req, res) => {
 
     console.log(`[start] ▶ Starting agent "${agent.name}" (${agent.id}) — purpose: ${agent.purpose}`);
 
-    const providers = getAllProviders();
-    console.log(`[start] Found ${providers.length} registered providers`);
-
-    // All agent purposes can access all provider categories
-    const purposeToCategory: Record<string, string[]> = {
-      research: ['Research', 'News', 'General', 'Finance', 'Social Media'],
-      trading: ['Finance', 'Social Media', 'Research', 'News', 'General'],
-      monitoring: ['Social Media', 'Finance', 'Research', 'News', 'General'],
-      content: ['Social Media', 'Finance', 'Research', 'News', 'General'],
-      custom: ['Social Media', 'Finance', 'Research', 'News', 'General'],
-    };
-    const relevantCategories = purposeToCategory[agent.purpose] || [];
-    console.log(`[start] Relevant categories for "${agent.purpose}": [${relevantCategories.join(', ')}]`);
-
-    const matchedProviders = providers.filter(p =>
-      relevantCategories.some(cat => p.category?.toLowerCase() === cat.toLowerCase())
-    );
-    console.log(`[start] Matched ${matchedProviders.length} providers: ${matchedProviders.map(p => p.name).join(', ') || 'none'}`);
-
-    if (matchedProviders.length === 0) {
-      console.log(`[start] ✗ No matching providers found for agent "${agent.name}"`);
-      return res.json({ message: 'No matching providers found for agent purpose', started: false });
-    }
-
+    // Get agent balance
     const coins = await suiClient.getCoins({ owner: agent.walletAddress, coinType: '0x2::sui::SUI' });
     const balance = coins.data.reduce((sum, c) => sum + parseInt(c.balance), 0);
     console.log(`[start] Agent wallet balance: ${balance} MIST (${balance / 1_000_000_000} SUI)`);
@@ -382,37 +361,59 @@ app.post('/api/agents/:id/start', async (req, res) => {
       });
     }
 
-    const affordable = matchedProviders.find(p => balance >= p.ratePerSecond * MINIMUM_STREAM_SECONDS);
-    if (!affordable) {
-      console.log(`[start] ✗ Insufficient balance for any matched provider (need ≥${MINIMUM_STREAM_SECONDS}s of streaming)`);
-      return res.status(402).json({ error: 'Insufficient balance for any matched provider', message: `Fund the agent wallet with at least ${Math.ceil((matchedProviders[0]?.ratePerSecond || 100) * MINIMUM_STREAM_SECONDS / 1_000_000_000)} SUI to start` });
+    // Use discovery scoring to pick the best provider
+    const providers = getAllProviders();
+    console.log(`[start] Evaluating ${providers.length} providers via discovery scoring`);
+    const activeEndpoints = new Set(agent.activeStreams.map((s: AgentStream) => s.endpoint));
+
+    const candidates = providers
+      .map(p => scoreProvider(p, agent.purpose, balance))
+      .map(c => {
+        if (activeEndpoints.has(c.endpoint)) { c.score -= 2; c.reasons.push('Already streaming'); }
+        return c;
+      })
+      .filter(c => c.affordable)
+      .sort((a, b) => b.score - a.score || a.ratePerSecondMist - b.ratePerSecondMist);
+
+    if (candidates.length === 0) {
+      console.log(`[start] ✗ No affordable providers found for agent "${agent.name}"`);
+      return res.json({ message: 'No affordable providers found for agent purpose', started: false });
     }
-    console.log(`[start] Selected provider: ${affordable.name} (${affordable.ratePerSecond} MIST/sec)`);
-    console.log(`[start] Opening stream to ${affordable.endpoint}...`);
+
+    const streamDurationStart = Math.max(Number(req.body.durationSeconds) || MINIMUM_STREAM_SECONDS, MINIMUM_STREAM_SECONDS);
+    const selected = candidates[0];
+    const matchedProvider = providers.find(p => p.endpoint === selected.endpoint);
+    if (!matchedProvider) {
+      console.error(`[start] ✗ Provider for ${selected.endpoint} not found in registry`);
+      return res.status(500).json({ error: 'Provider disappeared from registry' });
+    }
+    console.log(`[start] Discovery selected: ${selected.name} (score=${selected.score}, reasons: ${selected.reasons.join('; ')})`);
+    console.log(`[start] Opening stream to ${matchedProvider.endpoint}...`);
 
     const accessRes = await fetch(`http://localhost:${PORT}/api/agents/${agent.id}/access`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ endpoint: affordable.endpoint }),
+      body: JSON.stringify({ endpoint: matchedProvider.endpoint, durationSeconds: streamDurationStart }),
     });
     const accessData = await accessRes.json();
 
     if (accessData.streamId) {
       console.log(`[start] ✓ Agent "${agent.name}" started successfully`);
-      console.log(`[start]   provider: ${affordable.name}`);
+      console.log(`[start]   provider: ${matchedProvider.name}`);
       console.log(`[start]   streamId: ${accessData.streamId}`);
       console.log(`[start]   tx: ${accessData.creationTx}`);
       console.log(`[start]   deposit: ${accessData.depositMist} MIST (${accessData.depositMist / 1_000_000_000} SUI)`);
       return res.json({
         started: true,
-        provider: affordable.name,
+        provider: matchedProvider.name,
+        discovery: selected,
         ...accessData,
       });
     } else {
       console.error(`[start] ✗ Access failed: ${JSON.stringify(accessData)}`);
       return res.status(accessRes.status || 500).json({
         started: false,
-        provider: affordable.name,
+        provider: matchedProvider.name,
         error: accessData.error || 'Stream creation failed',
         message: accessData.message || 'Could not open a payment stream',
       });
@@ -420,6 +421,154 @@ app.post('/api/agents/:id/start', async (req, res) => {
   } catch (error: any) {
     console.error('[agents/:id/start] Error:', error?.message || error);
     res.status(500).json({ error: 'Failed to start agent', message: error?.message || String(error) });
+  }
+});
+
+// ============================================================
+//  AUTONOMOUS DISCOVERY — Agent evaluates marketplace providers
+// ============================================================
+
+/**
+ * Category relevance scoring: how well a provider's category matches an agent's purpose.
+ * Higher = more relevant. 0 = irrelevant.
+ */
+const PURPOSE_CATEGORY_SCORES: Record<string, Record<string, number>> = {
+  research:   { 'research': 10, 'finance': 8, 'news': 7, 'social media': 5, 'data feed': 6, 'general': 4 },
+  trading:    { 'finance': 10, 'social media': 7, 'research': 6, 'news': 5, 'data feed': 8, 'general': 3 },
+  monitoring: { 'social media': 9, 'finance': 7, 'news': 8, 'research': 5, 'data feed': 6, 'general': 4 },
+  content:    { 'social media': 10, 'news': 8, 'research': 6, 'finance': 4, 'data feed': 5, 'general': 5 },
+  custom:     { 'research': 7, 'finance': 7, 'social media': 7, 'news': 7, 'data feed': 7, 'general': 7 },
+};
+
+interface DiscoveryCandidate {
+  providerId: string;
+  name: string;
+  endpoint: string;
+  category: string;
+  ratePerSecondMist: number;
+  rateSuiPerSec: number;
+  score: number;
+  reasons: string[];
+  maxStreamSeconds: number; // how long the agent can stream with its balance
+  affordable: boolean;
+}
+
+/**
+ * Score a provider against an agent's purpose and budget.
+ */
+function scoreProvider(provider: any, agentPurpose: string, balanceMist: number): DiscoveryCandidate {
+  const reasons: string[] = [];
+  let score = 0;
+
+  // 1. Category relevance (0-10 points)
+  const purposeScores = PURPOSE_CATEGORY_SCORES[agentPurpose] || PURPOSE_CATEGORY_SCORES.custom;
+  const categoryKey = (provider.category || 'general').toLowerCase();
+  const categoryScore = purposeScores[categoryKey] ?? purposeScores['general'] ?? 3;
+  score += categoryScore;
+  if (categoryScore >= 8) reasons.push(`Highly relevant category: ${provider.category}`);
+  else if (categoryScore >= 5) reasons.push(`Relevant category: ${provider.category}`);
+  else reasons.push(`Low relevance category: ${provider.category}`);
+
+  // 2. Affordability (0-5 points)
+  const rateMist = provider.ratePerSecond || 100_000;
+  const maxStreamSeconds = rateMist > 0 ? Math.floor(balanceMist / rateMist) : 0;
+  const affordable = balanceMist >= rateMist; // can afford at least 1 second
+  if (affordable) {
+    if (maxStreamSeconds >= 3600) { score += 5; reasons.push('Can stream for 1+ hours'); }
+    else if (maxStreamSeconds >= 600) { score += 4; reasons.push(`Can stream for ${Math.floor(maxStreamSeconds / 60)} minutes`); }
+    else if (maxStreamSeconds >= 60) { score += 3; reasons.push(`Can stream for ${maxStreamSeconds}s`); }
+    else { score += 1; reasons.push(`Short stream: ${maxStreamSeconds}s`); }
+  } else {
+    reasons.push('Insufficient balance to stream');
+  }
+
+  // 3. Value — lower rate = better deal (0-3 points)
+  if (affordable) {
+    if (rateMist <= 10_000) { score += 3; reasons.push('Very low rate — excellent value'); }
+    else if (rateMist <= 50_000) { score += 2; reasons.push('Competitive rate'); }
+    else if (rateMist <= 100_000) { score += 1; reasons.push('Standard rate'); }
+    else { reasons.push('Premium rate'); }
+  }
+
+  // 4. Already streaming to this endpoint? (penalty)
+  // This is checked externally — caller passes activeEndpoints
+
+  return {
+    providerId: provider.id,
+    name: provider.name,
+    endpoint: provider.endpoint,
+    category: provider.category || 'General',
+    ratePerSecondMist: rateMist,
+    rateSuiPerSec: rateMist / 1_000_000_000,
+    score,
+    reasons,
+    maxStreamSeconds,
+    affordable,
+  };
+}
+
+/**
+ * POST /api/agents/:id/discover
+ * Agent queries the marketplace, evaluates all providers, returns ranked recommendations.
+ */
+app.post('/api/agents/:id/discover', async (req, res) => {
+  try {
+    const agent = getAgent(req.params.id);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+    console.log(`[discover] Agent "${agent.name}" (${agent.id}) scanning marketplace — purpose: ${agent.purpose}`);
+
+    // Get agent's on-chain wallet balance
+    let balanceMist = 0;
+    try {
+      const coins = await suiClient.getCoins({ owner: agent.walletAddress, coinType: '0x2::sui::SUI' });
+      balanceMist = coins.data.reduce((sum, c) => sum + parseInt(c.balance), 0);
+    } catch (err: any) {
+      console.error(`[discover] Failed to fetch balance for ${agent.id}:`, err?.message);
+    }
+    console.log(`[discover] Wallet balance: ${balanceMist} MIST (${balanceMist / 1_000_000_000} SUI)`);
+
+    const providers = getAllProviders();
+    console.log(`[discover] Evaluating ${providers.length} registered providers`);
+
+    // Active endpoints (to penalize duplicates)
+    const activeEndpoints = new Set(agent.activeStreams.map((s: AgentStream) => s.endpoint));
+
+    // Score and rank all providers
+    const candidates: DiscoveryCandidate[] = providers.map(p => {
+      const candidate = scoreProvider(p, agent.purpose, balanceMist);
+
+      // Penalty for already-streaming endpoints
+      if (activeEndpoints.has(candidate.endpoint)) {
+        candidate.score -= 2;
+        candidate.reasons.push('Already streaming to this endpoint');
+      }
+
+      return candidate;
+    });
+
+    // Sort by score descending, then by rate ascending (better value first)
+    candidates.sort((a, b) => b.score - a.score || a.ratePerSecondMist - b.ratePerSecondMist);
+
+    // Separate affordable from unaffordable
+    const affordable = candidates.filter(c => c.affordable);
+    const tooExpensive = candidates.filter(c => !c.affordable);
+
+    console.log(`[discover] Results: ${affordable.length} affordable, ${tooExpensive.length} too expensive`);
+    affordable.forEach(c => console.log(`  → ${c.name} (${c.endpoint}) score=${c.score} rate=${c.rateSuiPerSec} SUI/s max=${c.maxStreamSeconds}s`));
+
+    return res.json({
+      agentId: agent.id,
+      agentPurpose: agent.purpose,
+      balanceMist,
+      balanceSui: balanceMist / 1_000_000_000,
+      totalProviders: providers.length,
+      recommendations: affordable,
+      unaffordable: tooExpensive,
+    });
+  } catch (error: any) {
+    console.error('[discover] Error:', error?.message || error);
+    res.status(500).json({ error: 'Discovery failed', message: error?.message || String(error) });
   }
 });
 
@@ -435,7 +584,7 @@ app.get('/api/agents/:id/streams/:streamId/state', async (req, res) => {
     const stream = agent.activeStreams.find((s: AgentStream) => s.streamId === req.params.streamId);
     if (!stream) return res.status(404).json({ error: 'Stream not found on agent' });
 
-    // Read live on-chain balance
+    // Read live on-chain balance using the robust extractor
     let balanceMist = 0;
     try {
       const obj = await suiClient.getObject({
@@ -443,16 +592,31 @@ app.get('/api/agents/:id/streams/:streamId/state', async (req, res) => {
         options: { showContent: true },
       });
       const fields = (obj.data?.content as any)?.fields;
-      balanceMist = parseInt(fields?.balance?.fields?.value ?? '0');
-    } catch {
-      // fallback to 0
+      balanceMist = Number(extractStreamBalanceMist(fields));
+      console.log(`[state] Stream ${stream.streamId.substring(0, 12)}… on-chain balance: ${balanceMist} MIST`);
+    } catch (err: any) {
+      console.error(`[state] Failed to read on-chain balance for ${stream.streamId}:`, err?.message || err);
     }
 
     const elapsedMs = Date.now() - new Date(stream.openedAt).getTime();
     const elapsedSec = Math.floor(elapsedMs / 1000);
     const ratePerSec = stream.ratePerSecondMist / 1_000_000_000;
-    const drainedMist = Math.min(elapsedSec * stream.ratePerSecondMist, stream.ratePerSecondMist * MINIMUM_STREAM_SECONDS - balanceMist);
-    const remainingSec = ratePerSec > 0 ? Math.floor(balanceMist / stream.ratePerSecondMist) : 0;
+
+    // totalDurationSec: prefer stored duration, fallback to elapsed (time-based, not balance-based)
+    const storedDuration = stream.durationSeconds || 0;
+    const totalDurationSec = storedDuration > 0
+      ? storedDuration
+      : Math.max(elapsedSec, MINIMUM_STREAM_SECONDS);
+
+    // Sui streams don't auto-drain — balance only changes on withdraw().
+    // Calculate remaining time and drained amount based on elapsed time, not balance.
+    const remainingSec = Math.max(0, totalDurationSec - elapsedSec);
+    const totalDepositMist = stream.ratePerSecondMist * totalDurationSec;
+    const drainedMist = Math.min(elapsedSec * stream.ratePerSecondMist, totalDepositMist);
+
+    // Status: stream is 'depleted' when time expires OR balance hits zero
+    const timeExpired = elapsedSec >= totalDurationSec;
+    const status = timeExpired || balanceMist === 0 ? 'depleted' : 'streaming';
 
     return res.json({
       streamId: stream.streamId,
@@ -464,9 +628,10 @@ app.get('/api/agents/:id/streams/:streamId/state', async (req, res) => {
       balanceSui: balanceMist / 1_000_000_000,
       elapsedSec,
       remainingSec,
+      totalDurationSec,
       drainedMist,
       drainedSui: drainedMist / 1_000_000_000,
-      status: balanceMist > 0 ? 'streaming' : 'depleted',
+      status,
     });
   } catch (error: any) {
     console.error('[streams/:id/state] Error:', error?.message || error);
@@ -558,17 +723,44 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/** List all registered website listings */
+/** List registered website listings, optionally filtered by owner address */
 function listProviders(req: express.Request, res: express.Response) {
-  res.json({ providers: getAllProviders() });
+  const { providerAddress } = req.query;
+  let providers = getAllProviders();
+  if (providerAddress && typeof providerAddress === 'string') {
+    providers = providers.filter(p => p.providerAddress === providerAddress);
+  }
+  res.json({ providers });
 }
 
-/** Register a new website listing */
-function createProvider(req: express.Request, res: express.Response) {
-  const { providerAddress, name, websiteUrl, endpoint, ratePerSecond, description, category } = req.body;
+/** Register a new website listing — requires wallet signature */
+async function createProvider(req: express.Request, res: express.Response) {
+  const { providerAddress, name, websiteUrl, endpoint, ratePerSecond, description, category, signature } = req.body;
   if (!providerAddress || !name || !websiteUrl || !ratePerSecond) {
     return res.status(400).json({ error: 'Missing required fields: providerAddress, name, websiteUrl, ratePerSecond' });
   }
+
+  // Verify wallet signature to prove ownership
+  if (signature) {
+    try {
+      const endpointPath = endpoint || `/api/premium/listed/${slugify(name)}/feed`;
+      const signMessage = `FlowGate Provider Registration\nAddress: ${providerAddress}\nProvider: ${name}\nEndpoint: ${endpointPath}\nTimestamp: ${req.body.timestamp || Date.now()}`;
+      const messageBytes = new TextEncoder().encode(signMessage);
+      const publicKey = await verifyPersonalMessageSignature(messageBytes, signature);
+      const verifiedAddress = publicKey.toSuiAddress();
+      if (verifiedAddress !== providerAddress) {
+        console.error(`[providers] Signature mismatch: claimed ${providerAddress}, verified ${verifiedAddress}`);
+        return res.status(403).json({ error: 'Signature does not match provider address' });
+      }
+      console.log(`[providers] Signature verified for ${providerAddress}`);
+    } catch (err: any) {
+      console.error(`[providers] Signature verification failed:`, err?.message || err);
+      return res.status(403).json({ error: 'Invalid signature', message: err?.message || String(err) });
+    }
+  } else {
+    console.warn(`[providers] No signature provided for ${providerAddress} — registration accepted without verification`);
+  }
+
   const listing = {
     id: 'provider-' + Math.random().toString(36).substring(2, 10),
     providerAddress,
@@ -623,6 +815,65 @@ app.get('/api/providers/:id/earnings', (req, res) => {
     providerId: req.params.id,
     totalEarnedMist: provider.earningsMist || 0,
   });
+});
+
+/** List all agents consuming this provider's endpoint */
+app.get('/api/providers/:id/consumers', (req, res) => {
+  const provider = getProvider(req.params.id);
+  if (!provider) return res.status(404).json({ error: 'Provider not found' });
+
+  const allAgents = getAllAgents();
+  const consumers: any[] = [];
+
+  for (const agent of allAgents) {
+    for (const stream of agent.activeStreams) {
+      if (stream.endpoint === provider.endpoint) {
+        const elapsedMs = Date.now() - new Date(stream.openedAt).getTime();
+        const elapsedSec = Math.floor(elapsedMs / 1000);
+        const timeExpired = elapsedSec >= (stream.durationSeconds || 0);
+        consumers.push({
+          agentId: agent.id,
+          agentName: agent.name,
+          agentPurpose: agent.purpose,
+          streamId: stream.streamId,
+          ratePerSecondMist: stream.ratePerSecondMist,
+          durationSeconds: stream.durationSeconds || 0,
+          openedAt: stream.openedAt,
+          elapsedSec,
+          status: timeExpired ? 'depleted' : 'streaming',
+          depositMist: stream.ratePerSecondMist * (stream.durationSeconds || 0),
+        });
+      }
+    }
+  }
+
+  res.json({ providerId: req.params.id, consumers });
+});
+
+/** Delete a provider */
+app.delete('/api/providers/:id', (req, res) => {
+  const provider = getProvider(req.params.id);
+  if (!provider) return res.status(404).json({ error: 'Provider not found' });
+
+  dbDeleteProvider(req.params.id);
+  console.log(`[providers] Deleted provider "${provider.name}" (${provider.id})`);
+  res.json({ deleted: true, providerId: req.params.id });
+});
+
+/** Update provider settings (rate, description) */
+app.put('/api/providers/:id', (req, res) => {
+  const provider = getProvider(req.params.id);
+  if (!provider) return res.status(404).json({ error: 'Provider not found' });
+
+  const { ratePerSecond, description, category } = req.body;
+  const updated = {
+    ...provider,
+    ...(ratePerSecond !== undefined && { ratePerSecond: Number(ratePerSecond) }),
+    ...(description !== undefined && { description }),
+    ...(category !== undefined && { category }),
+  };
+  saveProvider(updated);
+  res.json(updated);
 });
 
 /** Health check */
@@ -731,43 +982,97 @@ app.get('/api/premium/bloomberg/feed', requireX402Payment, (req, res) => {
 });
 
 // ============================================================
+//  DYNAMIC PROXY — Generic x402-gated proxy for any registered provider
+// ============================================================
+
+/**
+ * Catch-all proxy for any registered provider endpoint.
+ * Must come AFTER the hardcoded premium routes above.
+ * 
+ * Flow:
+ *  1. Express matches /api/premium/*
+ *  2. requireX402Payment middleware checks for a valid stream
+ *  3. If paid → proxy forwards request to provider.websiteUrl
+ *  4. If not paid → 402 response with payment instructions
+ */
+app.all('/api/premium/*', requireX402Payment, async (req, res) => {
+  const provider = getProviderByEndpoint(req.path);
+  if (!provider || !provider.websiteUrl) {
+    return res.status(404).json({
+      error: 'Provider not found',
+      message: `No registered provider for path ${req.path}`,
+    });
+  }
+
+  const auth = (req as any).streamEngineAuth;
+  console.log(`[Proxy] Forwarding ${req.method} ${req.path} → ${provider.websiteUrl} (agent: ${auth?.agentAddress?.substring(0, 10) || 'unknown'})`);
+
+  try {
+    // Build upstream URL — preserve query string from the original request
+    const upstreamUrl = new URL(provider.websiteUrl);
+    // Merge any query params from the gateway request
+    for (const [key, value] of Object.entries(req.query)) {
+      if (typeof value === 'string') {
+        upstreamUrl.searchParams.set(key, value);
+      } else if (Array.isArray(value)) {
+        value.forEach(v => {
+          if (typeof v === 'string') upstreamUrl.searchParams.append(key, v);
+        });
+      }
+    }
+
+    const upstreamRes = await fetch(upstreamUrl.toString(), {
+      method: req.method,
+      headers: {
+        'Accept': req.headers.accept || 'application/json',
+        'User-Agent': 'FlowGate-Proxy/1.0',
+      },
+      signal: AbortSignal.timeout(15_000), // 15s timeout
+    });
+
+    // Forward relevant response headers
+    const contentType = upstreamRes.headers.get('content-type');
+    if (contentType) res.set('Content-Type', contentType);
+    res.set('X-Upstream-Status', String(upstreamRes.status));
+    res.set('X-FlowGate-Provider', provider.name);
+    res.set('X-FlowGate-Endpoint', provider.endpoint);
+
+    const body = await upstreamRes.text();
+    console.log(`[Proxy] ${provider.name} responded ${upstreamRes.status} — ${(body.length / 1024).toFixed(1)}KB`);
+
+    res.status(upstreamRes.status).send(body);
+  } catch (err: any) {
+    console.error(`[Proxy] Upstream error for ${provider.name}:`, err?.message || err);
+    res.status(502).json({
+      error: 'Upstream fetch failed',
+      provider: provider.name,
+      websiteUrl: provider.websiteUrl,
+      message: err?.message || 'Could not reach the upstream API',
+    });
+  }
+});
+
+// ============================================================
 //  START
 // ============================================================
 
 app.listen(PORT, () => {
+  // Always ensure providers exist with correct rates
+  const DEMO_PROVIDER_ADDRESS = '0x0000000000000000000000000000000000000000000000000000000000001234';
   const existingProviders = getAllProviders();
-  if (existingProviders.length === 0) {
-    const DEMO_PROVIDER_ADDRESS = '0x0000000000000000000000000000000000000000000000000000000000001234';
-    saveProvider({
-        id: 'x-social',
-        providerAddress: DEMO_PROVIDER_ADDRESS,
-        name: 'X (Twitter)',
-        description: 'Real-time posts, trending topics, and human interactions from X.com',
-        websiteUrl: 'https://x.com',
-        endpoint: '/api/premium/x-social/feed',
-        ratePerSecond: 100,
-        category: 'Social Media'
-    });
-    saveProvider({
-        id: 'reddit',
-        providerAddress: DEMO_PROVIDER_ADDRESS,
-        name: 'Reddit',
-        description: 'Upvoted threads, community discussions, and niche subreddit data',
-        websiteUrl: 'https://reddit.com',
-        endpoint: '/api/premium/reddit/feed',
-        ratePerSecond: 80,
-        category: 'Social Media'
-    });
-    saveProvider({
-        id: 'bloomberg',
-        providerAddress: DEMO_PROVIDER_ADDRESS,
-        name: 'Bloomberg',
-        description: 'Proprietary financial news, earnings call transcripts, and market commentary',
-        websiteUrl: 'https://bloomberg.com',
-        endpoint: '/api/premium/bloomberg/feed',
-        ratePerSecond: 200,
-        category: 'Finance'
-    });
+  const providerDefaults = [
+    { id: 'x-social', name: 'X (Twitter)', description: 'Real-time posts, trending topics, and human interactions from X.com', websiteUrl: 'https://x.com', endpoint: '/api/premium/x-social/feed', ratePerSecond: 100_000, category: 'Social Media' },
+    { id: 'reddit', name: 'Reddit', description: 'Upvoted threads, community discussions, and niche subreddit data', websiteUrl: 'https://reddit.com', endpoint: '/api/premium/reddit/feed', ratePerSecond: 100_000, category: 'Social Media' },
+    { id: 'bloomberg', name: 'Bloomberg', description: 'Proprietary financial news, earnings call transcripts, and market commentary', websiteUrl: 'https://bloomberg.com', endpoint: '/api/premium/bloomberg/feed', ratePerSecond: 100_000, category: 'Finance' },
+  ];
+  for (const def of providerDefaults) {
+    const existing = existingProviders.find(p => p.id === def.id);
+    if (!existing) {
+      saveProvider({ ...def, providerAddress: DEMO_PROVIDER_ADDRESS });
+    } else if (existing.ratePerSecond !== def.ratePerSecond) {
+      // Update rate if it changed
+      saveProvider({ ...existing, ratePerSecond: def.ratePerSecond });
+    }
   }
 
   const providers = getAllProviders();

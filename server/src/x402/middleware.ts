@@ -42,7 +42,7 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
   const streamId = (req.headers['x-streamengine-stream-id'] || req.headers['x-flowpay-stream-id']) as string;
   const txDigest = (req.headers['x-streamengine-tx-digest'] || req.headers['x-flowpay-tx-digest']) as string;
   const provider = getProviderByEndpoint(req.path);
-  const ratePerSecondMist = ratePerSecondToMist(provider?.ratePerSecond ?? process.env.STREAM_RATE_MIST ?? process.env.STREAM_RATE ?? '100');
+  const ratePerSecondMist = ratePerSecondToMist(provider?.ratePerSecond ?? process.env.STREAM_RATE_MIST ?? process.env.STREAM_RATE ?? '100000');
 
   if (streamId) {
       // Validate the stream object via RPC (no consensus contention — fast read)

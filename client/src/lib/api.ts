@@ -25,6 +25,7 @@ export interface BackendAgentStream {
   streamId: string;
   endpoint: string;
   ratePerSecondMist: number;
+  durationSeconds: number;
   openedAt: string;
 }
 
@@ -73,6 +74,29 @@ export interface CloseStreamResponse {
   closed: boolean;
   streamId: string;
   refundTx: string;
+}
+
+export interface DiscoveryCandidate {
+  providerId: string;
+  name: string;
+  endpoint: string;
+  category: string;
+  ratePerSecondMist: number;
+  rateSuiPerSec: number;
+  score: number;
+  reasons: string[];
+  maxStreamSeconds: number;
+  affordable: boolean;
+}
+
+export interface DiscoveryResponse {
+  agentId: string;
+  agentPurpose: string;
+  balanceMist: number;
+  balanceSui: number;
+  totalProviders: number;
+  recommendations: DiscoveryCandidate[];
+  unaffordable: DiscoveryCandidate[];
 }
 
 export interface ProviderListing {
@@ -144,6 +168,18 @@ export async function listAgentStreams(id: string): Promise<AgentStreamsResponse
   return res.json();
 }
 
+export async function discoverProviders(agentId: string): Promise<DiscoveryResponse> {
+  const res = await fetch(`${API_BASE}/api/agents/${agentId}/discover`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to discover providers");
+  }
+  return res.json();
+}
+
 export async function closeAgentStream(
   agentId: string,
   streamId: string
@@ -157,11 +193,13 @@ export async function closeAgentStream(
 }
 
 export async function startAgent(
-  agentId: string
+  agentId: string,
+  durationSeconds?: number
 ): Promise<StartResponse> {
   const res = await fetch(`${API_BASE}/api/agents/${agentId}/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ durationSeconds }),
   });
   if (!res.ok) {
     const err = await res.json();
@@ -212,6 +250,7 @@ export interface StreamState {
   balanceSui: number;
   elapsedSec: number;
   remainingSec: number;
+  totalDurationSec: number;
   drainedMist: number;
   drainedSui: number;
   status: "streaming" | "depleted";
@@ -268,8 +307,11 @@ export async function deleteAgent(agentId: string): Promise<DeleteAgentResponse>
 //  Provider API
 // ============================================================
 
-export async function listProviders(): Promise<{ providers: ProviderListing[] }> {
-  const res = await fetch(`${API_BASE}/api/providers`);
+export async function listProviders(providerAddress?: string): Promise<{ providers: ProviderListing[] }> {
+  const url = providerAddress
+    ? `${API_BASE}/api/providers?providerAddress=${encodeURIComponent(providerAddress)}`
+    : `${API_BASE}/api/providers`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error("Failed to list providers");
   return res.json();
 }
@@ -300,6 +342,55 @@ export async function getProviderEarnings(
 ): Promise<ProviderEarnings> {
   const res = await fetch(`${API_BASE}/api/providers/${providerId}/earnings`);
   if (!res.ok) throw new Error("Provider not found");
+  return res.json();
+}
+
+export interface ProviderConsumer {
+  agentId: string;
+  agentName: string;
+  agentPurpose: string;
+  streamId: string;
+  ratePerSecondMist: number;
+  durationSeconds: number;
+  openedAt: string;
+  elapsedSec: number;
+  status: "streaming" | "depleted";
+  depositMist: number;
+}
+
+export interface ProviderConsumersResponse {
+  providerId: string;
+  consumers: ProviderConsumer[];
+}
+
+export async function getProviderConsumers(
+  providerId: string
+): Promise<ProviderConsumersResponse> {
+  const res = await fetch(`${API_BASE}/api/providers/${providerId}/consumers`);
+  if (!res.ok) throw new Error("Failed to fetch provider consumers");
+  return res.json();
+}
+
+export async function updateProvider(
+  providerId: string,
+  updates: { ratePerSecond?: number; description?: string; category?: string }
+): Promise<ProviderListing> {
+  const res = await fetch(`${API_BASE}/api/providers/${providerId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) throw new Error("Failed to update provider");
+  return res.json();
+}
+
+export async function deleteProvider(
+  providerId: string
+): Promise<{ deleted: boolean; providerId: string }> {
+  const res = await fetch(`${API_BASE}/api/providers/${providerId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to delete provider");
   return res.json();
 }
 

@@ -109,6 +109,11 @@ export function deleteAgent(id: string): boolean {
   return result.changes > 0;
 }
 
+export function deleteProvider(id: string): boolean {
+  const result = db.prepare('DELETE FROM providers WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
 export function updateProviderEarnings(id: string, additionalMist: number): void {
   db.prepare('UPDATE providers SET earnings_mist = earnings_mist + ? WHERE id = ?')
     .run(additionalMist, id);

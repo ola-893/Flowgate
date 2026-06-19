@@ -2,16 +2,17 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Endpoint, EndpointType, API_BASE } from "../types";
 import { useToast } from "../lib/toast-context";
+import { dAppKit } from "../dapp-kit-config";
 import { 
   ArrowLeft, 
   ChevronRight, 
   Database, 
   Cpu, 
   FileCode, 
-  AlertTriangle,
-  Wallet,
-  Zap,
-  Check,
+  AlertTriangle, 
+  Wallet, 
+  Zap, 
+  Check, 
   Copy
 } from "lucide-react";
 
@@ -94,9 +95,27 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
       return;
     }
     setIsDeploying(true);
+    let deploySucceeded = false;
     
     try {
-      // POST to backend registry
+      // Sign a message proving wallet ownership
+      const finalEndpoint = endpointPath.trim() || `/api/premium/listed/${provider.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}/feed`;
+      const timestamp = Date.now();
+      const signMessage = `FlowGate Provider Registration\nAddress: ${walletAddress}\nProvider: ${provider}\nEndpoint: ${finalEndpoint}\nTimestamp: ${timestamp}`;
+      
+      let signature: string | undefined;
+      try {
+        const result = await dAppKit.signPersonalMessage({
+          message: new TextEncoder().encode(signMessage),
+        });
+        signature = result.signature;
+        console.log('[register] Wallet signature obtained');
+      } catch (signErr: any) {
+        console.warn('[register] Wallet signing failed, proceeding without signature:', signErr?.message || signErr);
+        addToast({ variant: 'warning', title: 'Signature skipped', message: 'Proceeding without wallet signature. Server will accept unsigned registration.' });
+      }
+
+      // POST to backend registry with signature
       const res = await fetch(`${API_BASE}/api/providers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -104,10 +123,12 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
           providerAddress: walletAddress,
           name: provider,
           websiteUrl: endpointUrl,
-          endpoint: endpointPath.trim() || undefined,
-          ratePerSecond: parseFloat(price),
+          endpoint: finalEndpoint,
+          ratePerSecond: Math.floor(parseFloat(price) * 1_000_000_000),
           description,
           category: type === "stream" ? "Data Feed" : type === "compute" ? "Compute" : "API",
+          signature,
+          timestamp,
         }),
       });
       const listing = await res.json();
@@ -139,36 +160,13 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
 
       onAddEndpoint(newEp);
       addToast({ variant: "success", title: "Endpoint registered", message: `Gateway path: ${finalPath}` });
-    } catch {
-      addToast({ variant: "error", title: "Backend unreachable", message: "Saved locally — will sync when server is back online." });
-      // Fallback: add locally even if backend is offline
-      const fallbackPath = endpointPath.trim() || `/api/premium/listed/${provider.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}/feed`;
-      setRegisteredEndpoint(fallbackPath);
-      const newEp: Endpoint = {
-        id: name.toLowerCase().replace(/_/g, "-") + "-" + Math.floor(Math.random() * 1000),
-        name: name.toUpperCase().replace(/\s+/g, "_"),
-        type,
-        status: "active",
-        price: parseFloat(price),
-        unit,
-        dataProvider: provider,
-        latency: 0,
-        throughput: "0 MB/s",
-        rating: 0,
-        uptime: 100,
-        description,
-        endpointUrl,
-        inputs: [],
-        outputs: [],
-        apiKeyRequired,
-        totalRequests: 0,
-        activeConsumers: 0,
-        gasSui: 0
-      };
-      onAddEndpoint(newEp);
+      deploySucceeded = true;
+    } catch (err: any) {
+      setError(err.message || 'Registration failed. Please try again.');
+      addToast({ variant: "error", title: "Registration failed", message: err.message || 'Could not register endpoint.' });
     } finally {
       setIsDeploying(false);
-      setDeploymentSuccess(true);
+      setDeploymentSuccess(deploySucceeded);
     }
   };
 
@@ -468,7 +466,7 @@ export default function RegisterPage({ onAddEndpoint, walletAddress, isWalletCon
               <div className="p-4 bg-amber-50 border border-amber-200 text-sm font-sans text-amber-900 flex items-start gap-3">
                 <AlertTriangle className="w-5 h-5 shrink-0 text-amber-700 mt-0.5" />
                 <p className="leading-relaxed text-xs">
-                  Deploying registers your endpoint in the FlowGate directory. Gas fees will be charged to your connected wallet.
+                  Deploying registers your endpoint in the FlowGate directory. No gas fees for registration — wallet signature verification is optional.
                 </p>
               </div>
             </div>
