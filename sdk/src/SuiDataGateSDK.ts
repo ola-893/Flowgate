@@ -158,9 +158,17 @@ export class SuiDataGateSDK {
             return this.performDirectPayment(url, options, recipientAddress, rate);
         }
 
-        const durationSecs = 3600; // 1 hr top up
         const rateMist = Math.floor(rate * 1_000_000_000);
+        const balance = await this.getBalance();
+        const balanceMist = Number(balance);
+        // Cap duration to what the wallet can afford, minimum 60s
+        const maxAffordableSecs = rateMist > 0 ? Math.floor(balanceMist / rateMist) : 0;
+        const durationSecs = Math.min(3600, Math.max(60, maxAffordableSecs - 1)); // -1 for gas buffer
         const amountMist = rateMist * durationSecs;
+
+        if (amountMist > balanceMist) {
+            throw new Error(`Insufficient balance: ${balanceMist} MIST, need ${amountMist} MIST for ${durationSecs}s stream`);
+        }
 
         console.log(`[SuiDataGateSDK] Initiating Stream (PTB): ${amountMist / 1_000_000_000} SUI for ${durationSecs}s`);
         
