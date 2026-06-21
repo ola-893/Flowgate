@@ -167,6 +167,20 @@ app.post('/api/agents', async (req, res) => {
   res.status(201).json(toPublicAgent(newAgent));
 });
 
+// Admin endpoint to clean up orphaned agents (temporary for migration)
+app.delete('/api/admin/agents/:id', async (req, res) => {
+  try {
+    const deleted = await dbDeleteAgent(req.params.id);
+    if (deleted) {
+      return res.json({ deleted: true, agentId: req.params.id });
+    }
+    return res.status(404).json({ error: 'Agent not found' });
+  } catch (error: any) {
+    console.error('[admin/agents/:id DELETE] Error:', error?.message || error);
+    res.status(500).json({ error: 'Delete failed', message: error?.message || String(error) });
+  }
+});
+
 app.get('/api/agents', async (req, res) => {
   const { ownerAddress } = req.query;
   if (typeof ownerAddress !== 'string' || !ownerAddress.trim()) {
