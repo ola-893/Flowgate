@@ -22,6 +22,15 @@ import { SuiDataGateSDK } from './SuiDataGateSDK';
 const GATEWAY_URL = 'http://localhost:3001';
 const SUI_RPC_URL = 'https://fullnode.testnet.sui.io:443';
 
+function suiScanTxUrl(digest: string): string {
+    const network = process.env.SUI_NETWORK || 'testnet';
+    return `https://suiscan.xyz/${network}/tx/${digest}`;
+}
+
+function terminalLink(label: string, url: string): string {
+    return `\u001b]8;;${url}\u0007${label}\u001b]8;;\u0007`;
+}
+
 async function runE2E() {
     console.log("=".repeat(60));
     console.log("  StreamEngine Full E2E Lifecycle Test");
@@ -98,8 +107,10 @@ async function runE2E() {
     for (const [host, meta] of activeStreams) {
         streamId = meta.streamId;
         const balance = await sdk.getStreamBalance(streamId);
+        const creationTxUrl = suiScanTxUrl(meta.creationDigest);
         console.log(`  Stream: ${streamId}`);
-        console.log(`  Creation TX Digest: ${meta.creationDigest}`);
+        console.log(`  Creation TX Digest: ${terminalLink(meta.creationDigest, creationTxUrl)}`);
+        console.log(`  Creation TX SuiScan: ${creationTxUrl}`);
         console.log(`  Host: ${host}`);
         console.log(`  On-chain balance: ${balance} MIST (${Number(balance) / 1e9} SUI)`);
     }
@@ -134,8 +145,10 @@ async function runE2E() {
     // --- Step 7: Close the stream → reclaim unspent funds ---
     console.log("\n[Step 7] Closing stream (reclaiming unspent funds)...");
     const closeResult = await sdk.closeStream(streamId);
+    const closeTxUrl = suiScanTxUrl(closeResult.digest);
     console.log(`  ✅ Stream closed!`);
-    console.log(`     TX Digest: ${closeResult.digest}`);
+    console.log(`     TX Digest: ${terminalLink(closeResult.digest, closeTxUrl)}`);
+    console.log(`     TX SuiScan: ${closeTxUrl}`);
     console.log(`     Refunded: ${closeResult.refundedAmount} MIST`);
 
     // --- Step 8: Hit endpoint again → should get 402 (access revoked!) ---

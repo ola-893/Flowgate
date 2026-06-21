@@ -52,3 +52,6 @@ server/test-faucet.ts
 server/streamengine.db*
 
 data/
+
+# Local Netlify folder
+.netlify

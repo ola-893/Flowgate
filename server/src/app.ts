@@ -3,17 +3,13 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { requireX402Payment } from './x402/middleware.ts';
-import { initDb, saveAgent, getAgent, getAllAgents, deleteAgent as dbDeleteAgent, saveProvider, getProvider, getProviderByEndpoint, getAllProviders, updateProviderEarnings, deleteProvider as dbDeleteProvider } from './db.ts';
+import { saveAgent, getAgent, getAllAgents, deleteAgent as dbDeleteAgent, saveProvider, getProvider, getProviderByEndpoint, getAllProviders, updateProviderEarnings, deleteProvider as dbDeleteProvider } from './db.ts';
 import { readStreamObjectState, extractStreamBalanceMist, client as suiClient } from './x402/streams.ts';
 import crypto from 'crypto';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { decodeSuiPrivateKey } from '@mysten/sui/cryptography';
 import { verifyPersonalMessageSignature } from '@mysten/sui/verify';
 import { PACKAGE_ID } from './x402/middleware.ts';
-
-// Initialize database
-await initDb();
-console.log('[DB] PostgreSQL tables initialized');
 
 if (!process.env.AGENT_KEY_SECRET) {
   throw new Error('AGENT_KEY_SECRET must be set — refusing to start with no encryption key');
@@ -125,7 +121,8 @@ app.post('/api/agents', async (req, res) => {
 });
 
 app.get('/api/agents', async (req, res) => {
-  res.json(await getAllAgents().map(toPublicAgent));
+  const agents = await getAllAgents();
+  res.json(agents.map(toPublicAgent));
 });
 
 app.delete('/api/agents/:id', async (req, res) => {
@@ -133,7 +130,7 @@ app.delete('/api/agents/:id', async (req, res) => {
     const agent = await getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-    const deleted = dbDeleteAgent(req.params.id);
+    const deleted = await dbDeleteAgent(req.params.id);
     if (deleted) {
       console.log(`[agents] Deleted agent "${agent.name}" (${agent.id})`);
       return res.json({ deleted: true, agentId: agent.id });
@@ -159,7 +156,7 @@ app.get('/api/agents/:id', async (req, res) => {
 
 app.get('/api/agents/:id/balance', async (req, res) => {
   try {
-    const agent = await getAgent(req.params.id);
+    const agent = getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
     const coins = await suiClient.getCoins({
@@ -186,7 +183,7 @@ app.get('/api/agents/:id/balance', async (req, res) => {
 
 app.post('/api/agents/:id/access', async (req, res) => {
   try {
-    const agent = await getAgent(req.params.id);
+    const agent = getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
     const { endpoint, durationSeconds } = req.body;
@@ -195,7 +192,7 @@ app.post('/api/agents/:id/access', async (req, res) => {
 
     console.log(`[access] Agent "${agent.name}" (${agent.id}) requesting access to ${endpoint}`);
 
-    const providerRegistry = await getAllProviders();
+    const providerRegistry = getAllProviders();
     const provider = providerRegistry.find(p => p.endpoint === endpoint);
     if (!provider) {
       console.error(`[access] Provider not found for endpoint ${endpoint}`);
@@ -262,7 +259,7 @@ app.post('/api/agents/:id/access', async (req, res) => {
       openedAt: new Date().toISOString(),
     });
     agent.spentMist += depositAmount;
-    await saveAgent(agent);
+    saveAgent(agent);
     console.log(`[access] Agent state updated — activeStreams: ${agent.activeStreams.length}, spentMist: ${agent.spentMist}`);
 
     console.log(`[access] Fetching data from ${endpoint}...`);
@@ -286,7 +283,7 @@ app.post('/api/agents/:id/access', async (req, res) => {
 
 app.get('/api/agents/:id/streams', async (req, res) => {
   try {
-    const agent = await getAgent(req.params.id);
+    const agent = getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
     const streamsWithBalance = await Promise.all(
@@ -314,7 +311,7 @@ app.get('/api/agents/:id/streams', async (req, res) => {
 
 app.delete('/api/agents/:id/streams/:streamId', async (req, res) => {
   try {
-    const agent = await getAgent(req.params.id);
+    const agent = getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
     const { streamId } = req.params;
@@ -340,7 +337,7 @@ app.delete('/api/agents/:id/streams/:streamId', async (req, res) => {
     });
 
     agent.activeStreams = agent.activeStreams.filter((s: AgentStream) => s.streamId !== streamId);
-    await saveAgent(agent);
+    saveAgent(agent);
 
     return res.json({ closed: true, streamId, refundTx: result.digest });
   } catch (error: any) {
@@ -351,7 +348,7 @@ app.delete('/api/agents/:id/streams/:streamId', async (req, res) => {
 
 app.post('/api/agents/:id/start', async (req, res) => {
   try {
-    const agent = await getAgent(req.params.id);
+    const agent = getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
     console.log(`[start] ▶ Starting agent "${agent.name}" (${agent.id}) — purpose: ${agent.purpose}`);
@@ -371,7 +368,7 @@ app.post('/api/agents/:id/start', async (req, res) => {
     }
 
     // Use discovery scoring to pick the best provider
-    const providers = await getAllProviders();
+    const providers = getAllProviders();
     console.log(`[start] Evaluating ${providers.length} providers via discovery scoring`);
     const activeEndpoints = new Set(agent.activeStreams.map((s: AgentStream) => s.endpoint));
 
@@ -522,7 +519,7 @@ function scoreProvider(provider: any, agentPurpose: string, balanceMist: number)
  */
 app.post('/api/agents/:id/discover', async (req, res) => {
   try {
-    const agent = await getAgent(req.params.id);
+    const agent = getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
     console.log(`[discover] Agent "${agent.name}" (${agent.id}) scanning marketplace — purpose: ${agent.purpose}`);
@@ -537,7 +534,7 @@ app.post('/api/agents/:id/discover', async (req, res) => {
     }
     console.log(`[discover] Wallet balance: ${balanceMist} MIST (${balanceMist / 1_000_000_000} SUI)`);
 
-    const providers = await getAllProviders();
+    const providers = getAllProviders();
     console.log(`[discover] Evaluating ${providers.length} registered providers`);
 
     // Active endpoints (to penalize duplicates)
@@ -587,7 +584,7 @@ app.post('/api/agents/:id/discover', async (req, res) => {
 
 app.get('/api/agents/:id/streams/:streamId/state', async (req, res) => {
   try {
-    const agent = await getAgent(req.params.id);
+    const agent = getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
     const stream = agent.activeStreams.find((s: AgentStream) => s.streamId === req.params.streamId);
@@ -650,7 +647,7 @@ app.get('/api/agents/:id/streams/:streamId/state', async (req, res) => {
 
 app.post('/api/agents/:id/streams/:streamId/fetch-data', async (req, res) => {
   try {
-    const agent = await getAgent(req.params.id);
+    const agent = getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
     const stream = agent.activeStreams.find((s: AgentStream) => s.streamId === req.params.streamId);
@@ -690,7 +687,7 @@ app.post('/api/agents/:id/streams/:streamId/fetch-data', async (req, res) => {
 
 app.post('/api/agents/:id/fund-demo', async (req, res) => {
   try {
-    const agent = await getAgent(req.params.id);
+    const agent = getAgent(req.params.id);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
     
     const { amountMist } = req.body;
@@ -742,9 +739,9 @@ function slugify(value: string): string {
 }
 
 /** List registered website listings, optionally filtered by owner address */
-async function listProviders(req: express.Request, res: express.Response) {
+function listProviders(req: express.Request, res: express.Response) {
   const { providerAddress } = req.query;
-  let providers = await getAllProviders();
+  let providers = getAllProviders();
   if (providerAddress && typeof providerAddress === 'string') {
     providers = providers.filter(p => p.providerAddress === providerAddress);
   }
@@ -789,7 +786,7 @@ async function createProvider(req: express.Request, res: express.Response) {
     description: description || '',
     category: category || 'General',
   };
-  await saveProvider(listing);
+  saveProvider(listing);
   res.status(201).json(listing);
 }
 
@@ -800,8 +797,8 @@ app.get('/api/registry/providers', listProviders);
 app.post('/api/providers', createProvider);
 
 /** Get a specific provider */
-app.get('/api/registry/providers/:id', async (req, res) => {
-  const provider = await getProvider(req.params.id);
+app.get('/api/registry/providers/:id', (req, res) => {
+  const provider = getProvider(req.params.id);
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
   res.json(provider);
 });
@@ -826,8 +823,8 @@ app.get('/api/streams/:id/balance', async (req, res) => {
 });
 
 /** Return provider earnings accumulated by successful access grants */
-app.get('/api/providers/:id/earnings', async (req, res) => {
-  const provider = await getProvider(req.params.id);
+app.get('/api/providers/:id/earnings', (req, res) => {
+  const provider = getProvider(req.params.id);
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
   res.json({
     providerId: req.params.id,
@@ -836,11 +833,11 @@ app.get('/api/providers/:id/earnings', async (req, res) => {
 });
 
 /** List all agents consuming this provider's endpoint */
-app.get('/api/providers/:id/consumers', async (req, res) => {
-  const provider = await getProvider(req.params.id);
+app.get('/api/providers/:id/consumers', (req, res) => {
+  const provider = getProvider(req.params.id);
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
 
-  const allAgents = await getAllAgents();
+  const allAgents = getAllAgents();
   const consumers: any[] = [];
 
   for (const agent of allAgents) {
@@ -869,8 +866,8 @@ app.get('/api/providers/:id/consumers', async (req, res) => {
 });
 
 /** Delete a provider */
-app.delete('/api/providers/:id', async (req, res) => {
-  const provider = await getProvider(req.params.id);
+app.delete('/api/providers/:id', (req, res) => {
+  const provider = getProvider(req.params.id);
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
 
   dbDeleteProvider(req.params.id);
@@ -879,8 +876,8 @@ app.delete('/api/providers/:id', async (req, res) => {
 });
 
 /** Update provider settings (rate, description) */
-app.put('/api/providers/:id', async (req, res) => {
-  const provider = await getProvider(req.params.id);
+app.put('/api/providers/:id', (req, res) => {
+  const provider = getProvider(req.params.id);
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
 
   const { ratePerSecond, description, category } = req.body;
@@ -890,13 +887,13 @@ app.put('/api/providers/:id', async (req, res) => {
     ...(description !== undefined && { description }),
     ...(category !== undefined && { category }),
   };
-  await saveProvider(updated);
+  saveProvider(updated);
   res.json(updated);
 });
 
 /** Health check */
-app.get('/api/health', async (req, res) => {
-  res.json({ status: 'ok', service: 'FlowGate Gateway', providers: await getAllProviders().length });
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', service: 'FlowGate Gateway', providers: getAllProviders().length });
 });
 
 // ============================================================
@@ -1014,7 +1011,7 @@ app.get('/api/premium/bloomberg/feed', requireX402Payment, (req, res) => {
  *  4. If not paid → 402 response with payment instructions
  */
 app.all('/api/premium/*', requireX402Payment, async (req, res) => {
-  const provider = await getProviderByEndpoint(req.path);
+  const provider = getProviderByEndpoint(req.path);
   if (!provider || !provider.websiteUrl) {
     return res.status(404).json({
       error: 'Provider not found',
@@ -1074,10 +1071,10 @@ app.all('/api/premium/*', requireX402Payment, async (req, res) => {
 //  START
 // ============================================================
 
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   // Always ensure providers exist with correct rates
   const DEMO_PROVIDER_ADDRESS = '0x0000000000000000000000000000000000000000000000000000000000001234';
-  const existingProviders = await getAllProviders();
+  const existingProviders = getAllProviders();
   const providerDefaults = [
     { id: 'x-social', name: 'X (Twitter)', description: 'Real-time posts, trending topics, and human interactions from X.com', websiteUrl: 'https://x.com', endpoint: '/api/premium/x-social/feed', ratePerSecond: 100_000, category: 'Social Media' },
     { id: 'reddit', name: 'Reddit', description: 'Upvoted threads, community discussions, and niche subreddit data', websiteUrl: 'https://reddit.com', endpoint: '/api/premium/reddit/feed', ratePerSecond: 100_000, category: 'Social Media' },
@@ -1086,14 +1083,14 @@ app.listen(PORT, async () => {
   for (const def of providerDefaults) {
     const existing = existingProviders.find(p => p.id === def.id);
     if (!existing) {
-      await saveProvider({ ...def, providerAddress: DEMO_PROVIDER_ADDRESS });
+      saveProvider({ ...def, providerAddress: DEMO_PROVIDER_ADDRESS });
     } else if (existing.ratePerSecond !== def.ratePerSecond) {
       // Update rate if it changed
-      await saveProvider({ ...existing, ratePerSecond: def.ratePerSecond });
+      saveProvider({ ...existing, ratePerSecond: def.ratePerSecond });
     }
   }
 
-  const providers = await getAllProviders();
+  const providers = getAllProviders();
   console.log(`\n🚀 FlowGate Gateway listening on http://localhost:${PORT}`);
   console.log(`\n📋 Registry: ${providers.length} websites listed`);
   providers.forEach(p => {

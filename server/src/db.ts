@@ -1,64 +1,72 @@
-import Database from 'better-sqlite3';
-import path from 'path';
+import postgres from 'postgres';
 
-const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), 'streamengine.db');
-const db = new Database(DB_PATH);
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL must be set');
+}
 
-// Enable WAL mode for better concurrent read performance
-db.pragma('journal_mode = WAL');
+const sql = postgres(process.env.DATABASE_URL, { ssl: 'require' });
 
-// Create tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS agents (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT,
-    purpose TEXT NOT NULL,
-    budget_mist INTEGER NOT NULL DEFAULT 0,
-    spent_mist INTEGER NOT NULL DEFAULT 0,
-    wallet_address TEXT NOT NULL,
-    encrypted_private_key TEXT NOT NULL,
-    active_streams TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL
-  );
+// Create tables if they don't exist
+export async function initDb() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS agents (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      purpose TEXT NOT NULL,
+      budget_mist BIGINT NOT NULL DEFAULT 0,
+      spent_mist BIGINT NOT NULL DEFAULT 0,
+      wallet_address TEXT NOT NULL,
+      encrypted_private_key TEXT NOT NULL,
+      active_streams TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL
+    )
+  `;
 
-  CREATE TABLE IF NOT EXISTS providers (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT,
-    website_url TEXT,
-    endpoint TEXT NOT NULL,
-    rate_per_second INTEGER NOT NULL,
-    category TEXT,
-    sui_address TEXT NOT NULL,
-    earnings_mist INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
-  );
-`);
+  await sql`
+    CREATE TABLE IF NOT EXISTS providers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      website_url TEXT DEFAULT '',
+      endpoint TEXT NOT NULL,
+      rate_per_second BIGINT NOT NULL,
+      category TEXT DEFAULT '',
+      sui_address TEXT NOT NULL,
+      earnings_mist BIGINT NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )
+  `;
+}
 
 // Agent helpers
-export function saveAgent(agent: any): void {
-  db.prepare(`
-    INSERT OR REPLACE INTO agents
-    (id, name, description, purpose, budget_mist, spent_mist, wallet_address,
-     encrypted_private_key, active_streams, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    agent.id, agent.name, agent.description ?? '', agent.purpose,
-    agent.budgetMist, agent.spentMist, agent.walletAddress,
-    agent.encryptedPrivateKey, JSON.stringify(agent.activeStreams ?? []),
-    agent.createdAt
-  );
+export async function saveAgent(agent: any): Promise<void> {
+  await sql`
+    INSERT INTO agents (id, name, description, purpose, budget_mist, spent_mist,
+      wallet_address, encrypted_private_key, active_streams, created_at)
+    VALUES (${agent.id}, ${agent.name}, ${agent.description ?? ''}, ${agent.purpose},
+      ${agent.budgetMist}, ${agent.spentMist}, ${agent.walletAddress},
+      ${agent.encryptedPrivateKey}, ${JSON.stringify(agent.activeStreams ?? [])},
+      ${agent.createdAt})
+    ON CONFLICT (id) DO UPDATE SET
+      name = EXCLUDED.name,
+      description = EXCLUDED.description,
+      purpose = EXCLUDED.purpose,
+      budget_mist = EXCLUDED.budget_mist,
+      spent_mist = EXCLUDED.spent_mist,
+      wallet_address = EXCLUDED.wallet_address,
+      encrypted_private_key = EXCLUDED.encrypted_private_key,
+      active_streams = EXCLUDED.active_streams
+  `;
 }
 
-export function getAgent(id: string): any | null {
-  const row = db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as any;
-  if (!row) return null;
-  return rowToAgent(row);
+export async function getAgent(id: string): Promise<any | null> {
+  const rows = await sql`SELECT * FROM agents WHERE id = ${id}`;
+  return rows[0] ? rowToAgent(rows[0]) : null;
 }
 
-export function getAllAgents(): any[] {
-  const rows = db.prepare('SELECT * FROM agents ORDER BY created_at DESC').all() as any[];
+export async function getAllAgents(): Promise<any[]> {
+  const rows = await sql`SELECT * FROM agents ORDER BY created_at DESC`;
   return rows.map(rowToAgent);
 }
 
@@ -68,8 +76,8 @@ function rowToAgent(row: any): any {
     name: row.name,
     description: row.description,
     purpose: row.purpose,
-    budgetMist: row.budget_mist,
-    spentMist: row.spent_mist,
+    budgetMist: Number(row.budget_mist),
+    spentMist: Number(row.spent_mist),
     walletAddress: row.wallet_address,
     encryptedPrivateKey: row.encrypted_private_key,
     activeStreams: JSON.parse(row.active_streams),
@@ -78,51 +86,50 @@ function rowToAgent(row: any): any {
 }
 
 // Provider helpers
-export function saveProvider(provider: any): void {
-  db.prepare(`
-    INSERT OR REPLACE INTO providers
-    (id, name, description, website_url, endpoint, rate_per_second,
-     category, sui_address, earnings_mist, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    provider.id, provider.name, provider.description ?? '',
-    provider.websiteUrl ?? '', provider.endpoint, provider.ratePerSecond,
-    provider.category ?? '', provider.sui_address || provider.providerAddress,
-    provider.earningsMist ?? 0,
-    provider.createdAt ?? provider.registeredAt ?? new Date().toISOString()
-  );
+export async function saveProvider(provider: any): Promise<void> {
+  await sql`
+    INSERT INTO providers (id, name, description, website_url, endpoint,
+      rate_per_second, category, sui_address, earnings_mist, created_at)
+    VALUES (${provider.id}, ${provider.name}, ${provider.description ?? ''},
+      ${provider.websiteUrl ?? ''}, ${provider.endpoint}, ${provider.ratePerSecond},
+      ${provider.category ?? ''}, ${provider.sui_address || provider.providerAddress},
+      ${provider.earningsMist ?? 0}, ${provider.createdAt ?? provider.registeredAt ?? new Date().toISOString()})
+    ON CONFLICT (id) DO UPDATE SET
+      name = EXCLUDED.name,
+      description = EXCLUDED.description,
+      website_url = EXCLUDED.website_url,
+      rate_per_second = EXCLUDED.rate_per_second,
+      category = EXCLUDED.category
+  `;
 }
 
-export function getProvider(id: string): any | null {
-  const row = db.prepare('SELECT * FROM providers WHERE id = ?').get(id) as any;
-  if (!row) return null;
-  return rowToProvider(row);
+export async function getProvider(id: string): Promise<any | null> {
+  const rows = await sql`SELECT * FROM providers WHERE id = ${id}`;
+  return rows[0] ? rowToProvider(rows[0]) : null;
 }
 
-export function getAllProviders(): any[] {
-  const rows = db.prepare('SELECT * FROM providers ORDER BY created_at DESC').all() as any[];
+export async function getAllProviders(): Promise<any[]> {
+  const rows = await sql`SELECT * FROM providers ORDER BY created_at DESC`;
   return rows.map(rowToProvider);
 }
 
-export function deleteAgent(id: string): boolean {
-  const result = db.prepare('DELETE FROM agents WHERE id = ?').run(id);
-  return result.changes > 0;
+export async function deleteAgent(id: string): Promise<boolean> {
+  const result = await sql`DELETE FROM agents WHERE id = ${id}`;
+  return result.count > 0;
 }
 
-export function deleteProvider(id: string): boolean {
-  const result = db.prepare('DELETE FROM providers WHERE id = ?').run(id);
-  return result.changes > 0;
+export async function deleteProvider(id: string): Promise<boolean> {
+  const result = await sql`DELETE FROM providers WHERE id = ${id}`;
+  return result.count > 0;
 }
 
-export function updateProviderEarnings(id: string, additionalMist: number): void {
-  db.prepare('UPDATE providers SET earnings_mist = earnings_mist + ? WHERE id = ?')
-    .run(additionalMist, id);
+export async function updateProviderEarnings(id: string, additionalMist: number): Promise<void> {
+  await sql`UPDATE providers SET earnings_mist = earnings_mist + ${additionalMist} WHERE id = ${id}`;
 }
 
-export function getProviderByEndpoint(endpoint: string): any | null {
-  const row = db.prepare('SELECT * FROM providers WHERE endpoint = ?').get(endpoint) as any;
-  if (!row) return null;
-  return rowToProvider(row);
+export async function getProviderByEndpoint(endpoint: string): Promise<any | null> {
+  const rows = await sql`SELECT * FROM providers WHERE endpoint = ${endpoint}`;
+  return rows[0] ? rowToProvider(rows[0]) : null;
 }
 
 function rowToProvider(row: any): any {
@@ -132,13 +139,13 @@ function rowToProvider(row: any): any {
     description: row.description,
     websiteUrl: row.website_url,
     endpoint: row.endpoint,
-    ratePerSecond: row.rate_per_second,
+    ratePerSecond: Number(row.rate_per_second),
     category: row.category,
     providerAddress: row.sui_address, // mapping back to providerAddress used by index.ts
     sui_address: row.sui_address,
-    earningsMist: row.earnings_mist,
+    earningsMist: Number(row.earnings_mist),
     createdAt: row.created_at,
   };
 }
 
-export default db;
+export default sql;

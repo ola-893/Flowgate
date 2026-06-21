@@ -28,6 +28,15 @@ const DEFAULT_TESTNET_KEY_SERVERS = [
     { objectId: '0xf5d14a81a982144ae441cd7d64b09027f116a468bd36e7eca494f750591623c8', weight: 1 },
 ];
 
+function suiScanTxUrl(digest: string): string {
+    const network = process.env.SUI_NETWORK || 'testnet';
+    return `https://suiscan.xyz/${network}/tx/${digest}`;
+}
+
+function terminalLink(label: string, url: string): string {
+    return `\u001b]8;;${url}\u0007${label}\u001b]8;;\u0007`;
+}
+
 export class SuiDataGateSDK {
     private client: SuiJsonRpcClient;
     private keypair: Ed25519Keypair;
@@ -184,7 +193,9 @@ export class SuiDataGateSDK {
         });
 
         // Retry Request with stream ID
-        console.log(`[SuiDataGateSDK] Stream ${streamData.streamId} created. TX: ${streamData.digest}. Retrying...`);
+        const creationTxUrl = suiScanTxUrl(streamData.digest);
+        console.log(`[SuiDataGateSDK] Stream ${streamData.streamId} created. TX: ${terminalLink(streamData.digest, creationTxUrl)}. Retrying...`);
+        console.log(`[SuiDataGateSDK] SuiScan: ${creationTxUrl}`);
         const retryOptions = {
             ...options,
             headers: {
@@ -399,7 +410,9 @@ export class SuiDataGateSDK {
             }
         }
 
-        console.log(`[SuiDataGateSDK] ✅ Stream closed. Refunded: ${refundedAmount} MIST. TX: ${result.digest}`);
+        const closeTxUrl = suiScanTxUrl(result.digest);
+        console.log(`[SuiDataGateSDK] ✅ Stream closed. Refunded: ${refundedAmount} MIST. TX: ${terminalLink(result.digest, closeTxUrl)}`);
+        console.log(`[SuiDataGateSDK] SuiScan: ${closeTxUrl}`);
         return { digest: result.digest, refundedAmount: String(refundedAmount) };
     }
 

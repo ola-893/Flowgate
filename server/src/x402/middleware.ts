@@ -41,7 +41,7 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
   // Support both header naming conventions
   const streamId = (req.headers['x-streamengine-stream-id'] || req.headers['x-flowpay-stream-id']) as string;
   const txDigest = (req.headers['x-streamengine-tx-digest'] || req.headers['x-flowpay-tx-digest']) as string;
-  const provider = getProviderByEndpoint(req.path);
+  const provider = await getProviderByEndpoint(req.path);
   const ratePerSecondMist = ratePerSecondToMist(provider?.ratePerSecond ?? process.env.STREAM_RATE_MIST ?? process.env.STREAM_RATE ?? '100000');
 
   if (streamId) {
@@ -50,7 +50,7 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
           const stream = await readStreamObjectState(streamId);
           if (stream.balanceMist > 0n) {
               const earnedMist = stream.ratePerSecondMist ?? ratePerSecondMist;
-              if (provider) updateProviderEarnings(provider.id, earnedMist);
+              if (provider) await updateProviderEarnings(provider.id, earnedMist);
 
               console.log(`[Middleware] ✅ Valid stream ${streamId} found with balance: ${stream.balanceMist}`);
               (req as StreamEngineRequest).streamEngineAuth = {
@@ -74,7 +74,7 @@ export async function requireX402Payment(req: Request, res: Response, next: Next
               options: { showEffects: true, showInput: true }
           });
           if (tx.effects?.status.status === 'success') {
-              if (provider) updateProviderEarnings(provider.id, ratePerSecondMist);
+              if (provider) await updateProviderEarnings(provider.id, ratePerSecondMist);
               console.log(`[Middleware] ✅ Valid Fast-Path payment found: ${txDigest}`);
               return next();
           }
