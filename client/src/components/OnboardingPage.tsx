@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { ConnectButton } from "@mysten/dapp-kit-react/ui";
+import SlushConnectButton from "./SlushConnectButton";
 import {
   Wallet,
   Globe,
@@ -13,8 +13,7 @@ import {
   Zap,
   Shield,
   Play,
-  Bot,
-  Download
+  Bot
 } from "lucide-react";
 import SlushWalletBanner from "./SlushWalletBanner";
 
@@ -167,20 +166,7 @@ export default function OnboardingPage({
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-4">
-                    <ConnectButton
-                      modalOptions={{
-                        filterFn: (wallet: any) => /slush|sui wallet/i.test(wallet.name),
-                      }}
-                    />
-                    <a
-                      href="https://slush.app"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#4A90D9] hover:bg-[#3A7BC8] text-white rounded-full text-xs font-mono font-bold transition-all"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Download Slush Wallet
-                    </a>
+                    <SlushConnectButton />
                     <button
                       onClick={() => setStep(3)}
                       className="text-xs font-mono text-stone-500 hover:text-stone-800 underline underline-offset-4 transition-colors cursor-pointer"

@@ -7,14 +7,13 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Routes, Route, useNavigate, useLocation, Navigate } from "react-router-dom";
 import { Endpoint, Agent, HealthStatus, API_BASE, mapProviderToEndpoint, ProviderListing } from "./types";
 import { useCurrentAccount } from "@mysten/dapp-kit-react";
-import { ConnectButton } from "@mysten/dapp-kit-react/ui";
+import SlushConnectButton from "./components/SlushConnectButton";
 import { dAppKit } from "./dapp-kit-config";
 import {
   Menu,
   X,
   Wallet,
-  ChevronRight,
-  Download
+  ChevronRight
 } from "lucide-react";
 import SlushWalletBanner from "./components/SlushWalletBanner";
 
@@ -49,8 +48,17 @@ export default function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [serverReachable, setServerReachable] = useState<boolean | null>(null);
+  // Tracks which wallet address the current agents belong to.
+  // Routing effects use this to avoid navigating with stale empty agents
+  // when the wallet address changes (e.g. on page refresh or reconnect).
+  const [agentsOwnerAddress, setAgentsOwnerAddress] = useState<string | null>(null);
 
   const fetchAgents = useCallback(async () => {
+    // Immediately mark agents as stale for the current wallet address
+    // so routing effects won't fire with old data
+    setAgentsLoaded(false);
+    setAgentsOwnerAddress(null);
+
     if (!walletAddress) {
       setAgents([]);
       setAgentsLoaded(true);
@@ -77,9 +85,16 @@ export default function App() {
           connectedEndpoints: a.connectedEndpoints || a.activeStreams?.map((s: any) => s.endpoint) || [],
         }));
         setAgents(mapped);
+        setAgentsOwnerAddress(walletAddress);
+        // agentsLoaded is set in the finally block below
+
+        console.log(`[FlowGate] Loaded ${mapped.length} agent(s) for ${walletAddress.slice(0, 10)}...${walletAddress.slice(-4)}:`);
+        mapped.forEach((a: any) => {
+          console.log(`  → "${a.name}" (${a.id}) | wallet: ${a.walletAddress || 'no wallet'}`);
+        });
       }
     } catch (e) {
-      console.error(e);
+      console.error('[FlowGate] fetchAgents failed:', e);
       setServerReachable(false);
     } finally {
       setAgentsLoaded(true);
@@ -102,24 +117,28 @@ export default function App() {
     setAgents((prev) => prev.filter((a) => a.id !== id));
   };
 
-  // Auto-navigate when wallet connects on landing page
-  // Has agents → premium, no agents → onboarding
-  // Gated on agentsLoaded AND serverReachable (not false) to avoid redirecting to
-  // /onboarding when the server is simply unreachable (agents still exist in the DB)
-  const prevConnectedRef = React.useRef(isWalletConnected);
-  useEffect(() => {
-    if (isWalletConnected && !prevConnectedRef.current && location.pathname === "/" && agentsLoaded && serverReachable !== false) {
-      navigate(agents.length > 0 ? "/premium" : "/onboarding");
-    }
-    prevConnectedRef.current = isWalletConnected;
-  }, [isWalletConnected, location.pathname, navigate, agents.length, agentsLoaded, serverReachable]);
+  // ─── Routing ───────────────────────────────────────────────────────
+  // Route connected users away from the landing page (/) to the correct
+  // destination based on whether they have agents.
+  //
+  // Key guard: agentsOwnerAddress === walletAddress ensures we only
+  // navigate AFTER agents have been fetched for the CURRENT wallet.
+  // This prevents the race where stale empty agents (from a null wallet
+  // fetch) cause an instant redirect to /onboarding before the real
+  // fetch completes.
+  // Don't navigate until agents are loaded for the current wallet
+  // Guard: walletAddress !== null ensures we don't route with null-wallet empty agents
+  const agentsReady = agentsLoaded && agentsOwnerAddress === walletAddress && walletAddress !== null;
 
-  // If a connected user lands on / (e.g. sidebar Home button), route appropriately
   useEffect(() => {
-    if (isWalletConnected && location.pathname === "/" && agentsLoaded && serverReachable !== false) {
-      navigate(agents.length > 0 ? "/premium" : "/onboarding", { replace: true });
-    }
-  }, [isWalletConnected, location.pathname, agents.length, navigate, agentsLoaded, serverReachable]);
+    if (!isWalletConnected || location.pathname !== "/") return;
+    if (!agentsReady) return; // don't navigate until agents match this wallet
+    if (serverReachable === false) return; // don't redirect if server is down
+
+    const target = agents.length > 0 ? "/premium" : "/onboarding";
+    console.log(`[FlowGate] Routing → ${target} (agents: ${agents.length}, ready: ${agentsReady})`);
+    navigate(target, { replace: true });
+  }, [isWalletConnected, location.pathname, agentsReady, agents.length, serverReachable, navigate]);
 
   // Fetch real SUI balance from chain — tries mainnet, falls back to testnet
   useEffect(() => {
@@ -345,21 +364,7 @@ export default function App() {
             ) : (
               <div className="flex flex-col gap-2 py-1">
                 <SlushWalletBanner variant="compact" className="mb-1" />
-                <div className="w-full flex justify-center overflow-hidden rounded-full" style={{ transform: "scale(0.85)" }}>
-                  <ConnectButton
-                    modalOptions={{
-                      filterFn: (wallet: any) => /slush|sui wallet/i.test(wallet.name),
-                    }}
-                  />
-                </div>
-                <a
-                  href="https://slush.app"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center justify-center gap-1 text-[9px] font-mono text-[#4A90D9] hover:underline mt-1"
-                >
-                  <Download className="w-2.5 h-2.5" /> Download Slush Wallet
-                </a>
+                <SlushConnectButton className="w-full" />
               </div>
             )}
           </div>

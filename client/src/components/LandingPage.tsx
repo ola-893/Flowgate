@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
-import { ConnectButton } from "@mysten/dapp-kit-react/ui";
 import {
   ArrowRight,
   ChevronRight,
@@ -13,6 +12,7 @@ import {
   Cpu,
   Globe,
 } from "lucide-react";
+import SlushConnectButton from "./SlushConnectButton";
 
 
 interface LandingPageProps {
@@ -74,13 +74,7 @@ export default function LandingPage({
               </button>
             </div>
           ) : (
-            <div className="flex items-center" style={{ transform: "scale(0.85)", transformOrigin: "right center" }}>
-              <ConnectButton
-                modalOptions={{
-                  filterFn: (wallet: any) => /slush|sui wallet/i.test(wallet.name),
-                }}
-              />
-            </div>
+            <SlushConnectButton scale />
           )}
 
           {isWalletConnected ? (
@@ -121,7 +115,7 @@ export default function LandingPage({
               <span className="px-3.5 py-1 bg-[#1C1A17] text-[#FAF9F5] rounded-full font-mono text-[9px] font-bold uppercase tracking-wider">+144,390 Queries Cleared</span>
               <div className="w-6 h-6 rounded-full bg-[#1C1A17]/5 flex items-center justify-center group-hover:bg-[#1C1A17]/10 transition-colors">
                 <Activity className="w-3 h-3 text-[#1C1A17]/50 group-hover:text-[#1C1A17] transition-colors" />
-              </div>
+              </div> 
             </div>
             <p className="text-[11.5px] text-[#1C1A17]/70 leading-relaxed font-sans">Voluntarily register your website endpoints or APIs. AI agents pay you micro-fractions of SUI in real-time as they scrape, fetch, and digest your data.</p>
             <div className="flex items-center gap-1.5 text-[9px] font-mono text-[#8C2C16] font-bold uppercase mt-1 tracking-wider">
@@ -131,12 +125,12 @@ export default function LandingPage({
           </motion.div>
 
           <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.5 }} className="flex items-center gap-3 sm:gap-4 group flex-wrap">
-            <button onClick={() => navigate("/onboarding")} className="py-4.5 px-7 bg-[#1C1A17] hover:bg-[#2E2E38] text-[#FAF9F5] font-mono font-bold text-xs tracking-wider uppercase rounded-full flex items-center gap-3 shadow-lg hover:shadow-xl hover:translate-y-[-1px] transition-all cursor-pointer">
+            {/* <button onClick={() => navigate("/onboarding")} className="py-4.5 px-7 bg-[#1C1A17] hover:bg-[#2E2E38] text-[#FAF9F5] font-mono font-bold text-xs tracking-wider uppercase rounded-full flex items-center gap-3 shadow-lg hover:shadow-xl hover:translate-y-[-1px] transition-all cursor-pointer">
               <span>{isWalletConnected ? "SETUP YOUR AGENT" : "REGISTER YOUR WEBSITE"}</span>
               <div className="w-5 h-5 bg-white/10 rounded-full flex items-center justify-center group-hover:translate-x-1 transition-transform">
                 <ChevronRight className="w-3.5 h-3.5 text-white" />
               </div>
-            </button>
+            </button> */}
             <div className="text-[10px] font-mono text-[#1C1A17]/55 leading-tight uppercase font-semibold">
               settlement<br/><span className="text-[#8C2C16] font-black">IMMEDIATE / ON-CHAIN</span>
             </div>
