@@ -6,8 +6,9 @@
  * time out with UND_ERR_CONNECT_TIMEOUT or ECONNRESET. Meanwhile `curl`
  * (which uses Apple's Network.framework / LibreSSL) connects fine.
  *
- * This transport shells out to `curl` for each RPC request, which is the
- * only reliable way to reach external HTTPS servers from Node.js 24.
+ * This transport prefers `curl` when it is available, but falls back to
+ * native fetch on hosts where curl is not installed. It also rotates through
+ * every configured RPC URL before surfacing a request failure.
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -25,11 +26,13 @@ export class CurlTransport implements JsonRpcTransport {
   #forceIpv4: boolean;
   #maxAttempts: number;
   #activeUrlIndex = 0;
+  #curlAvailable: boolean;
 
   constructor(urls: string | string[], options: CurlTransportOptions = {}) {
     this.#urls = Array.isArray(urls) ? urls : [urls];
     this.#forceIpv4 = options.forceIpv4 ?? process.env.SUI_RPC_FORCE_IPV4 === 'true';
     this.#maxAttempts = options.maxAttempts ?? 2;
+    this.#curlAvailable = process.env.SUI_RPC_DISABLE_CURL !== 'true';
   }
 
   async request<T = unknown>(input: JsonRpcTransportRequestOptions): Promise<T> {
@@ -54,7 +57,7 @@ export class CurlTransport implements JsonRpcTransport {
             throw new Error(`RPC Error ${data.error.code}: ${data.error.message}`);
           }
 
-          if (attempt > 1 || urlIndex !== this.#activeUrlIndex) {
+          if (process.env.SUI_RPC_DEBUG === 'true' && (attempt > 1 || urlIndex !== this.#activeUrlIndex)) {
             console.warn(`[sui-rpc] ${input.method} recovered via ${url}`);
           }
           this.#activeUrlIndex = urlIndex;
@@ -63,7 +66,9 @@ export class CurlTransport implements JsonRpcTransport {
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : String(error);
           errors.push(`${url}: ${message}`);
-          console.warn(`[sui-rpc] ${input.method} failed on ${url} (attempt ${attempt}/${this.#maxAttempts}): ${message}`);
+          if (process.env.SUI_RPC_DEBUG === 'true') {
+            console.warn(`[sui-rpc] ${input.method} failed on ${url} (attempt ${attempt}/${this.#maxAttempts}): ${message}`);
+          }
         }
       }
     }
@@ -72,6 +77,23 @@ export class CurlTransport implements JsonRpcTransport {
   }
 
   async #requestOnce(url: string, input: JsonRpcTransportRequestOptions, body: string): Promise<string> {
+    if (!this.#curlAvailable) {
+      return this.#requestWithFetch(url, input, body);
+    }
+
+    try {
+      return await this.#requestWithCurl(url, input, body);
+    } catch (error) {
+      if (isCurlMissing(error)) {
+        this.#curlAvailable = false;
+        return this.#requestWithFetch(url, input, body);
+      }
+
+      throw error;
+    }
+  }
+
+  async #requestWithCurl(url: string, input: JsonRpcTransportRequestOptions, body: string): Promise<string> {
     const args = [
       '--silent',
       '--show-error',
@@ -95,4 +117,41 @@ export class CurlTransport implements JsonRpcTransport {
 
     return stdout;
   }
+
+  async #requestWithFetch(url: string, input: JsonRpcTransportRequestOptions, body: string): Promise<string> {
+    const controller = input.signal ? undefined : new AbortController();
+    const timeoutMs = Number(process.env.SUI_RPC_MAX_TIME_SECONDS || '25') * 1000;
+    const timeout = controller
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : undefined;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Client-Sdk-Type': 'typescript',
+          'Client-Request-Method': input.method,
+        },
+        body,
+        signal: input.signal ?? controller?.signal,
+      });
+
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`);
+      }
+
+      return text;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+}
+
+function isCurlMissing(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const code = 'code' in error ? String(error.code) : '';
+  const message = error instanceof Error ? error.message : String(error);
+  return code === 'ENOENT' || message.includes('spawn curl ENOENT');
 }

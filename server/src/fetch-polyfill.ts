@@ -11,12 +11,15 @@
  * with retry logic, so that ALL fetch calls — including those made internally
  * by the Sui SDK during signAndExecuteTransaction — work reliably.
  */
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
+const nativeFetch = globalThis.fetch?.bind(globalThis);
+const curlAvailable = process.env.SUI_RPC_DISABLE_CURL !== 'true'
+  && spawnSync('curl', ['--version'], { stdio: 'ignore' }).status === 0;
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -103,6 +106,10 @@ function curlFetch(input: string | URL | Request, init?: RequestInit): Promise<R
       try {
         return await curlFetchOnce(url, method, headerArgs, body);
       } catch (error: any) {
+        if (error?.code === 'ENOENT' && nativeFetch) {
+          return nativeFetch(input, init);
+        }
+
         lastError = error;
         const isRetryable = error.message?.includes('timed out') ||
           error.message?.includes('Timeout') ||
@@ -123,7 +130,18 @@ function curlFetch(input: string | URL | Request, init?: RequestInit): Promise<R
   })();
 }
 
-// Replace globalThis.fetch with our curl-backed implementation
-globalThis.fetch = curlFetch as typeof fetch;
+if (process.env.FETCH_POLYFILL_DISABLED === 'true' || !curlAvailable) {
+  if (!nativeFetch) {
+    throw new Error('[fetch-polyfill] Native fetch is unavailable and curl is not installed');
+  }
 
-console.log('[fetch-polyfill] Patched globalThis.fetch with curl-backed implementation + retry (Node.js 24 workaround)');
+  globalThis.fetch = nativeFetch as typeof fetch;
+  const reason = process.env.FETCH_POLYFILL_DISABLED === 'true'
+    ? 'disabled by env'
+    : 'curl not found';
+  console.log(`[fetch-polyfill] Using native fetch (${reason})`);
+} else {
+  // Replace globalThis.fetch with our curl-backed implementation
+  globalThis.fetch = curlFetch as typeof fetch;
+  console.log('[fetch-polyfill] Patched globalThis.fetch with curl-backed implementation + retry (Node.js 24 workaround)');
+}
